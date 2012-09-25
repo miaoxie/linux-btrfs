@@ -1918,6 +1918,7 @@ static int __btrfs_inc_extent_ref(struct btrfs_trans_handle *trans,
 
 	path->reada = 1;
 	path->leave_spinning = 1;
+	path->eb_cache = &trans->eb_cache;
 	/* this will setup the path even if it fails to insert the back ref */
 	ret = insert_inline_extent_backref(trans, root->fs_info->extent_root,
 					   path, bytenr, num_bytes, parent,
@@ -2049,6 +2050,7 @@ static int run_delayed_extent_op(struct btrfs_trans_handle *trans,
 
 	path->reada = 1;
 	path->leave_spinning = 1;
+	path->eb_cache = &trans->eb_cache;
 	ret = btrfs_search_slot(trans, root->fs_info->extent_root, &key,
 				path, 0, 1);
 	if (ret < 0) {
@@ -5067,6 +5069,7 @@ static int __btrfs_free_extent(struct btrfs_trans_handle *trans,
 	is_data = owner_objectid >= BTRFS_FIRST_FREE_OBJECTID;
 	BUG_ON(!is_data && refs_to_drop != 1);
 
+	path->eb_cache = &trans->eb_cache;
 	ret = lookup_extent_backref(trans, extent_root, path, &iref,
 				    bytenr, num_bytes, parent,
 				    root_objectid, owner_objectid,
@@ -6062,6 +6065,7 @@ static int alloc_reserved_file_extent(struct btrfs_trans_handle *trans,
 		return -ENOMEM;
 
 	path->leave_spinning = 1;
+	path->eb_cache = &trans->eb_cache;
 	ret = btrfs_insert_empty_item(trans, fs_info->extent_root, path,
 				      ins, size);
 	if (ret) {
@@ -6126,6 +6130,7 @@ static int alloc_reserved_tree_block(struct btrfs_trans_handle *trans,
 		return -ENOMEM;
 
 	path->leave_spinning = 1;
+	path->eb_cache = &trans->eb_cache;
 	ret = btrfs_insert_empty_item(trans, fs_info->extent_root, path,
 				      ins, size);
 	if (ret) {

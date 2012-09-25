@@ -46,6 +46,8 @@ struct btrfs_transaction {
 	int aborted;
 };
 
+struct extent_buffer_cache;
+
 struct btrfs_trans_handle {
 	u64 transid;
 	u64 bytes_reserved;
@@ -57,6 +59,7 @@ struct btrfs_trans_handle {
 	struct btrfs_transaction *transaction;
 	struct btrfs_block_rsv *block_rsv;
 	struct btrfs_block_rsv *orig_rsv;
+	struct extent_buffer_cache eb_cache;
 	int aborted;
 	int adding_csums;
 	/*

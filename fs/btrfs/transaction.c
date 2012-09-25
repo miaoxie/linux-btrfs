@@ -363,6 +363,7 @@ again:
 	h->block_rsv = NULL;
 	h->orig_rsv = NULL;
 	h->aborted = 0;
+	extent_buffer_cache_init(&h->eb_cache);
 	h->qgroup_reserved = qgroup_reserved;
 	h->delayed_ref_elem.seq = 0;
 	INIT_LIST_HEAD(&h->qgroup_ref_list);
@@ -589,6 +590,9 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 		err = -EIO;
 	}
 	assert_qgroups_uptodate(trans);
+
+	if (trans->eb_cache.cached_eb)
+		free_extent_buffer(trans->eb_cache.cached_eb);
 
 	memset(trans, 0, sizeof(*trans));
 	kmem_cache_free(btrfs_trans_handle_cachep, trans);
@@ -1299,6 +1303,9 @@ static void cleanup_transaction(struct btrfs_trans_handle *trans,
 	if (current->journal_info == trans)
 		current->journal_info = NULL;
 
+	if (trans->eb_cache.cached_eb)
+		free_extent_buffer(trans->eb_cache.cached_eb);
+
 	kmem_cache_free(btrfs_trans_handle_cachep, trans);
 }
 
@@ -1586,6 +1593,9 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 
 	if (current->journal_info == trans)
 		current->journal_info = NULL;
+
+	if (trans->eb_cache.cached_eb)
+		free_extent_buffer(trans->eb_cache.cached_eb);
 
 	kmem_cache_free(btrfs_trans_handle_cachep, trans);
 
