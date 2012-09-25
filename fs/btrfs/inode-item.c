@@ -80,7 +80,7 @@ btrfs_lookup_inode_ref(struct btrfs_trans_handle *trans,
 int btrfs_del_inode_ref(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   const char *name, int name_len,
-			   u64 inode_objectid, u64 ref_objectid, u64 *index)
+			   struct inode *inode, u64 ref_objectid, u64 *index)
 {
 	struct btrfs_path *path;
 	struct btrfs_key key;
@@ -93,7 +93,7 @@ int btrfs_del_inode_ref(struct btrfs_trans_handle *trans,
 	int ret;
 	int del_len = name_len + sizeof(*ref);
 
-	key.objectid = inode_objectid;
+	key.objectid = btrfs_ino(inode);
 	key.offset = ref_objectid;
 	btrfs_set_key_type(&key, BTRFS_INODE_REF_KEY);
 
@@ -103,6 +103,7 @@ int btrfs_del_inode_ref(struct btrfs_trans_handle *trans,
 
 	path->leave_spinning = 1;
 
+	btrfs_path_set_eb_cache(root, inode, path);
 	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
 	if (ret > 0) {
 		ret = -ENOENT;
@@ -140,7 +141,7 @@ out:
 int btrfs_insert_inode_ref(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   const char *name, int name_len,
-			   u64 inode_objectid, u64 ref_objectid, u64 index)
+			   struct inode *inode, u64 ref_objectid, u64 index)
 {
 	struct btrfs_path *path;
 	struct btrfs_key key;
@@ -149,7 +150,7 @@ int btrfs_insert_inode_ref(struct btrfs_trans_handle *trans,
 	int ret;
 	int ins_len = name_len + sizeof(*ref);
 
-	key.objectid = inode_objectid;
+	key.objectid = btrfs_ino(inode);
 	key.offset = ref_objectid;
 	btrfs_set_key_type(&key, BTRFS_INODE_REF_KEY);
 
@@ -158,6 +159,7 @@ int btrfs_insert_inode_ref(struct btrfs_trans_handle *trans,
 		return -ENOMEM;
 
 	path->leave_spinning = 1;
+	btrfs_path_set_eb_cache(root, inode, path);
 	ret = btrfs_insert_empty_item(trans, root, path, &key,
 				      ins_len);
 	if (ret == -EEXIST) {

@@ -16,7 +16,6 @@
 #include "extent_map.h"
 #include "compat.h"
 #include "ctree.h"
-#include "btrfs_inode.h"
 #include "volumes.h"
 #include "check-integrity.h"
 #include "locking.h"
@@ -3774,6 +3773,12 @@ int extent_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		return -ENOMEM;
 	path->leave_spinning = 1;
 
+	/*
+	 * we are sure we will search the fs/file tree, so needn't call
+	 * btrfs_path_set_eb_cache
+	 */
+	path->eb_cache = &BTRFS_I(inode)->fs_eb_cache;
+
 	start = ALIGN(start, BTRFS_I(inode)->root->sectorsize);
 	len = ALIGN(len, BTRFS_I(inode)->root->sectorsize);
 
@@ -3965,6 +3970,8 @@ static struct extent_buffer *__alloc_extent_buffer(struct extent_io_tree *tree,
 	eb->lock_nested = 0;
 	init_waitqueue_head(&eb->write_lock_wq);
 	init_waitqueue_head(&eb->read_lock_wq);
+	seqcount_init(&eb->chg_seq);
+	seqcount_init(&eb->free_seq);
 
 #if LEAK_DEBUG
 	spin_lock_irqsave(&leak_lock, flags);

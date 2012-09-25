@@ -18,7 +18,6 @@
 
 #ifndef __BTRFS_TRANSACTION__
 #define __BTRFS_TRANSACTION__
-#include "btrfs_inode.h"
 #include "delayed-ref.h"
 #include "ctree.h"
 

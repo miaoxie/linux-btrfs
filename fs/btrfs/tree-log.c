@@ -25,6 +25,7 @@
 #include "print-tree.h"
 #include "compat.h"
 #include "tree-log.h"
+#include "delayed-inode.h"
 
 /* magic values for the inode_only field in btrfs_log_inode:
  *
@@ -2294,6 +2295,7 @@ int btrfs_del_dir_entries_in_log(struct btrfs_trans_handle *trans,
 		goto out_unlock;
 	}
 
+	btrfs_path_set_eb_cache(log, dir, path);
 	di = btrfs_lookup_dir_item(trans, log, path, dir_ino,
 				   name, name_len, -1);
 	if (IS_ERR(di)) {
@@ -2385,7 +2387,7 @@ int btrfs_del_inode_ref_in_log(struct btrfs_trans_handle *trans,
 	log = root->log_root;
 	mutex_lock(&BTRFS_I(inode)->log_mutex);
 
-	ret = btrfs_del_inode_ref(trans, log, name, name_len, btrfs_ino(inode),
+	ret = btrfs_del_inode_ref(trans, log, name, name_len, inode,
 				  dirid, &index);
 	mutex_unlock(&BTRFS_I(inode)->log_mutex);
 	if (ret == -ENOSPC) {
@@ -2868,6 +2870,8 @@ static int btrfs_log_inode(struct btrfs_trans_handle *trans,
 		return ret;
 	}
 
+	btrfs_path_set_eb_cache(root, inode, path);
+	btrfs_path_set_eb_cache(log, inode, dst_path);
 	mutex_lock(&BTRFS_I(inode)->log_mutex);
 
 	/*

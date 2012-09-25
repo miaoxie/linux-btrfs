@@ -35,7 +35,6 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "btrfs_inode.h"
 #include "volumes.h"
 #include "print-tree.h"
 #include "async-thread.h"
@@ -45,6 +44,7 @@
 #include "inode-map.h"
 #include "check-integrity.h"
 #include "rcu-string.h"
+#include "delayed-inode.h"
 
 static struct extent_io_ops btree_extent_io_ops;
 static void end_workqueue_fn(struct btrfs_work *work);

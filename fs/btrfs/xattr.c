@@ -23,7 +23,6 @@
 #include <linux/xattr.h>
 #include <linux/security.h>
 #include "ctree.h"
-#include "btrfs_inode.h"
 #include "transaction.h"
 #include "xattr.h"
 #include "disk-io.h"
@@ -102,6 +101,7 @@ static int do_setxattr(struct btrfs_trans_handle *trans,
 	if (!path)
 		return -ENOMEM;
 
+	btrfs_path_set_eb_cache(root, inode, path);
 	if (flags & XATTR_REPLACE) {
 		di = btrfs_lookup_xattr(trans, root, path, btrfs_ino(inode), name,
 					name_len, -1);

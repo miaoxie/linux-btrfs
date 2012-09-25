@@ -138,6 +138,11 @@ struct extent_buffer {
 	struct rcu_head rcu_head;
 	pid_t lock_owner;
 
+	/* trace the time of changing */
+	seqcount_t chg_seq;
+	/* trace the time that this extent buffer is erased from the tree */
+	seqcount_t free_seq;
+
 	/* count of read lock holders on the extent buffer */
 	atomic_t write_locks;
 	atomic_t read_locks;
@@ -163,6 +168,39 @@ struct extent_buffer {
 	struct page *inline_pages[INLINE_EXTENT_BUFFER_PAGES];
 	struct page **pages;
 };
+
+struct extent_buffer_cache {
+	struct extent_buffer *cached_eb;
+	u64 transid;
+	unsigned chg_seq;
+	unsigned free_seq;
+	spinlock_t lock;
+	bool need_lock;
+};
+
+static inline void btrfs_lock_extent_buffer_cache(
+					struct extent_buffer_cache *cache)
+{
+	if (cache->need_lock)
+		spin_lock(&cache->lock);
+}
+
+static inline void btrfs_unlock_extent_buffer_cache(
+					struct extent_buffer_cache *cache)
+{
+	if (cache->need_lock)
+		spin_unlock(&cache->lock);
+}
+
+static inline void extent_buffer_cache_init(struct extent_buffer_cache *cache)
+{
+	cache->cached_eb = NULL;
+	cache->chg_seq = 0;
+	cache->free_seq = 0;
+	cache->need_lock = 0;
+	cache->transid = 0;
+	spin_lock_init(&cache->lock);
+}
 
 static inline void extent_set_compress_type(unsigned long *bio_flags,
 					    int compress_type)

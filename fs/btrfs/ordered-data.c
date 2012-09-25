@@ -22,7 +22,6 @@
 #include <linux/pagevec.h>
 #include "ctree.h"
 #include "transaction.h"
-#include "btrfs_inode.h"
 #include "extent_io.h"
 
 static u64 entry_end(struct btrfs_ordered_extent *entry)

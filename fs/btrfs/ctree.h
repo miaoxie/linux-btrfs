@@ -548,9 +548,14 @@ struct btrfs_path {
 	int slots[BTRFS_MAX_LEVEL];
 	/* if there is real range locking, this locks field will change */
 	int locks[BTRFS_MAX_LEVEL];
+	unsigned free_seq[BTRFS_MAX_LEVEL];
+	unsigned chg_seq[BTRFS_MAX_LEVEL];
 	int reada;
 	/* keep some upper locks as we walk down */
 	int lowest_level;
+	int max_level;
+
+	struct extent_buffer_cache *eb_cache;
 
 	/*
 	 * set by btrfs_split_item, tells search_slot to keep all locks
@@ -2730,6 +2735,27 @@ static inline u32 btrfs_level_size(struct btrfs_root *root, int level)
 	return root->nodesize;
 }
 
+#include "btrfs_inode.h"
+
+static inline void btrfs_path_set_eb_cache(struct btrfs_root *root,
+					   struct inode *inode,
+					   struct btrfs_path *path)
+{
+	WARN_ON(path->eb_cache);
+
+	if (!path->search_commit_root) {
+		if (root->objectid == BTRFS_TREE_LOG_OBJECTID)
+			path->eb_cache = &BTRFS_I(inode)->log_eb_cache;
+		else
+			path->eb_cache = &BTRFS_I(inode)->fs_eb_cache;
+	}
+}
+
+static inline void btrfs_path_clear_eb_cache(struct btrfs_path *path)
+{
+	path->eb_cache = NULL;
+}
+
 /* helper function to cast into the data area of the leaf. */
 #define btrfs_item_ptr(leaf, slot, type) \
 	((type *)(btrfs_leaf_data(leaf) + \
@@ -3167,11 +3193,11 @@ int btrfs_find_orphan_item(struct btrfs_root *root, u64 offset);
 int btrfs_insert_inode_ref(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   const char *name, int name_len,
-			   u64 inode_objectid, u64 ref_objectid, u64 index);
+			   struct inode *inode, u64 ref_objectid, u64 index);
 int btrfs_del_inode_ref(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   const char *name, int name_len,
-			   u64 inode_objectid, u64 ref_objectid, u64 *index);
+			   struct inode *inode, u64 ref_objectid, u64 *index);
 struct btrfs_inode_ref *
 btrfs_lookup_inode_ref(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root,
@@ -3194,7 +3220,7 @@ int btrfs_lookup_bio_sums_dio(struct btrfs_root *root, struct inode *inode,
 			      struct bio *bio, u64 logical_offset);
 int btrfs_insert_file_extent(struct btrfs_trans_handle *trans,
 			     struct btrfs_root *root,
-			     u64 objectid, u64 pos,
+			     struct inode *inode, u64 pos,
 			     u64 disk_offset, u64 disk_num_bytes,
 			     u64 num_bytes, u64 offset, u64 ram_bytes,
 			     u8 compression, u8 encryption, u16 other_encoding);

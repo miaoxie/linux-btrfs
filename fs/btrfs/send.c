@@ -30,7 +30,6 @@
 #include "backref.h"
 #include "locking.h"
 #include "disk-io.h"
-#include "btrfs_inode.h"
 #include "transaction.h"
 
 static int g_verbose = 0;

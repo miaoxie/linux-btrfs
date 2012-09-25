@@ -20,6 +20,7 @@
 #include "disk-io.h"
 #include "hash.h"
 #include "transaction.h"
+#include "delayed-inode.h"
 
 /*
  * insert a name into a directory, doing overflow properly if there is a hash
@@ -144,6 +145,7 @@ int btrfs_insert_dir_item(struct btrfs_trans_handle *trans, struct btrfs_root
 	btrfs_cpu_key_to_disk(&disk_key, location);
 
 	data_size = sizeof(*dir_item) + name_len;
+	btrfs_path_set_eb_cache(root, dir, path);
 	dir_item = insert_with_overflow(trans, root, path, &key, data_size,
 					name, name_len);
 	if (IS_ERR(dir_item)) {

@@ -30,6 +30,7 @@
 #include "tree-log.h"
 #include "inode-map.h"
 #include "volumes.h"
+#include "delayed-inode.h"
 
 #define BTRFS_ROOT_TRANS_TAG 0
 

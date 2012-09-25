@@ -36,7 +36,6 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "btrfs_inode.h"
 #include "volumes.h"
 #include "ordered-data.h"
 #include "compression.h"

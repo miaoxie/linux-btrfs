@@ -27,7 +27,6 @@
 #include "transaction.h"
 #include "volumes.h"
 #include "locking.h"
-#include "btrfs_inode.h"
 #include "async-thread.h"
 #include "free-space-cache.h"
 #include "inode-map.h"

@@ -46,7 +46,6 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "btrfs_inode.h"
 #include "ioctl.h"
 #include "print-tree.h"
 #include "volumes.h"

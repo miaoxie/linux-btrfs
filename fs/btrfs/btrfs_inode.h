@@ -22,7 +22,6 @@
 #include "extent_map.h"
 #include "extent_io.h"
 #include "ordered-data.h"
-#include "delayed-inode.h"
 
 /*
  * ordered_data_close is set by truncate when a file that used
@@ -39,6 +38,7 @@
 #define BTRFS_INODE_HAS_ORPHAN_ITEM		5
 #define BTRFS_INODE_HAS_ASYNC_EXTENT		6
 
+struct btrfs_delayed_node;
 /* in memory btrfs inode */
 struct btrfs_inode {
 	/* which subvolume this inode belongs to */
@@ -159,6 +159,9 @@ struct btrfs_inode {
 
 	struct btrfs_delayed_node *delayed_node;
 
+	struct extent_buffer_cache fs_eb_cache;
+	struct extent_buffer_cache log_eb_cache;
+
 	struct inode vfs_inode;
 };
 
@@ -212,5 +215,4 @@ static inline int btrfs_inode_in_log(struct inode *inode, u64 generation)
 	mutex_unlock(&root->log_mutex);
 	return ret;
 }
-
 #endif

@@ -33,7 +33,6 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "btrfs_inode.h"
 #include "ioctl.h"
 #include "print-tree.h"
 #include "tree-log.h"
@@ -610,8 +609,10 @@ int btrfs_drop_extents(struct btrfs_trans_handle *trans, struct inode *inode,
 
 	while (1) {
 		recow = 0;
+		btrfs_path_set_eb_cache(root, inode, path);
 		ret = btrfs_lookup_file_extent(trans, root, path, ino,
 					       search_start, modify_tree);
+		btrfs_path_clear_eb_cache(path);
 		if (ret < 0)
 			break;
 		if (ret > 0 && path->slots[0] > 0 && search_start == start) {
@@ -626,7 +627,9 @@ next_slot:
 		leaf = path->nodes[0];
 		if (path->slots[0] >= btrfs_header_nritems(leaf)) {
 			BUG_ON(del_nr > 0);
+			btrfs_path_set_eb_cache(root, inode, path);
 			ret = btrfs_next_leaf(root, path);
+			btrfs_path_clear_eb_cache(path);
 			if (ret < 0)
 				break;
 			if (ret > 0) {

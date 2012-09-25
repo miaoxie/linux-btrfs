@@ -38,7 +38,7 @@
 
 int btrfs_insert_file_extent(struct btrfs_trans_handle *trans,
 			     struct btrfs_root *root,
-			     u64 objectid, u64 pos,
+			     struct inode *inode, u64 pos,
 			     u64 disk_offset, u64 disk_num_bytes,
 			     u64 num_bytes, u64 offset, u64 ram_bytes,
 			     u8 compression, u8 encryption, u16 other_encoding)
@@ -48,6 +48,7 @@ int btrfs_insert_file_extent(struct btrfs_trans_handle *trans,
 	struct btrfs_key file_key;
 	struct btrfs_path *path;
 	struct extent_buffer *leaf;
+	u64 objectid = btrfs_ino(inode);
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -57,6 +58,7 @@ int btrfs_insert_file_extent(struct btrfs_trans_handle *trans,
 	btrfs_set_key_type(&file_key, BTRFS_EXTENT_DATA_KEY);
 
 	path->leave_spinning = 1;
+	btrfs_path_set_eb_cache(root, inode, path);
 	ret = btrfs_insert_empty_item(trans, root, path, &file_key,
 				      sizeof(*item));
 	if (ret < 0)

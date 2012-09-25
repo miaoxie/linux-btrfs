@@ -25,7 +25,6 @@
 #include <linux/slab.h>
 
 #include "ctree.h"
-#include "btrfs_inode.h"
 #include "xattr.h"
 
 struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
