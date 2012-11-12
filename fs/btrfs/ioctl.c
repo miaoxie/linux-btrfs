@@ -1293,12 +1293,13 @@ out_ra:
 	return ret;
 }
 
-static noinline int btrfs_ioctl_resize(struct btrfs_root *root,
+static noinline int btrfs_ioctl_resize(struct file *file,
 					void __user *arg)
 {
 	u64 new_size;
 	u64 old_size;
 	u64 devid = 1;
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_vol_args *vol_args;
 	struct btrfs_trans_handle *trans;
 	struct btrfs_device *device = NULL;
@@ -1307,11 +1308,12 @@ static noinline int btrfs_ioctl_resize(struct btrfs_root *root,
 	int ret = 0;
 	int mod = 0;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
-
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	mutex_lock(&root->fs_info->volume_mutex);
 	if (root->fs_info->balance_ctl) {
@@ -1415,6 +1417,7 @@ out_free:
 	kfree(vol_args);
 out:
 	mutex_unlock(&root->fs_info->volume_mutex);
+	mnt_drop_write_file(file);
 	return ret;
 }
 
@@ -3759,7 +3762,7 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_DEFRAG_RANGE:
 		return btrfs_ioctl_defrag(file, argp);
 	case BTRFS_IOC_RESIZE:
-		return btrfs_ioctl_resize(root, argp);
+		return btrfs_ioctl_resize(file, argp);
 	case BTRFS_IOC_ADD_DEV:
 		return btrfs_ioctl_add_dev(root, argp);
 	case BTRFS_IOC_RM_DEV:
