@@ -1568,6 +1568,7 @@ static int btrfs_prepare_sprout(struct btrfs_root *root)
 	super_flags = btrfs_super_flags(disk_super) &
 		      ~BTRFS_SUPER_FLAG_SEEDING;
 	btrfs_set_super_flags(disk_super, super_flags);
+	root->fs_info->fs_state &= ~BTRFS_SUPER_FLAG_SEEDING;
 
 	return 0;
 }
@@ -1648,32 +1649,25 @@ error:
 	return ret;
 }
 
-int btrfs_init_new_device(struct btrfs_root *root, char *device_path)
+int btrfs_init_new_device(struct btrfs_root *root, const char *device_path,
+			  bool seed_fs)
 {
 	struct request_queue *q;
 	struct btrfs_trans_handle *trans;
 	struct btrfs_device *device;
 	struct block_device *bdev;
 	struct list_head *devices;
-	struct super_block *sb = root->fs_info->sb;
 	struct rcu_string *name;
 	u64 total_bytes;
-	int seeding_dev = 0;
 	int ret = 0;
-
-	if ((sb->s_flags & MS_RDONLY) && !root->fs_info->fs_devices->seeding)
-		return -EROFS;
 
 	bdev = blkdev_get_by_path(device_path, FMODE_WRITE | FMODE_EXCL,
 				  root->fs_info->bdev_holder);
 	if (IS_ERR(bdev))
 		return PTR_ERR(bdev);
 
-	if (root->fs_info->fs_devices->seeding) {
-		seeding_dev = 1;
-		down_write(&sb->s_umount);
+	if (seed_fs)
 		mutex_lock(&uuid_mutex);
-	}
 
 	filemap_write_and_wait(bdev->bd_inode->i_mapping);
 
@@ -1740,8 +1734,7 @@ int btrfs_init_new_device(struct btrfs_root *root, char *device_path)
 	device->mode = FMODE_EXCL;
 	set_blocksize(device->bdev, 4096);
 
-	if (seeding_dev) {
-		sb->s_flags &= ~MS_RDONLY;
+	if (seed_fs) {
 		ret = btrfs_prepare_sprout(root);
 		BUG_ON(ret); /* -ENOMEM */
 	}
@@ -1776,7 +1769,7 @@ int btrfs_init_new_device(struct btrfs_root *root, char *device_path)
 				    total_bytes + 1);
 	mutex_unlock(&root->fs_info->fs_devices->device_list_mutex);
 
-	if (seeding_dev) {
+	if (seed_fs) {
 		ret = init_first_rw_device(trans, root, device);
 		if (ret) {
 			btrfs_abort_transaction(trans, root, ret);
@@ -1806,9 +1799,8 @@ int btrfs_init_new_device(struct btrfs_root *root, char *device_path)
 		btrfs_calc_num_tolerated_disk_barrier_failures(root->fs_info);
 	ret = btrfs_commit_transaction(trans, root);
 
-	if (seeding_dev) {
+	if (seed_fs) {
 		mutex_unlock(&uuid_mutex);
-		up_write(&sb->s_umount);
 
 		if (ret) /* transaction commit */
 			return ret;
@@ -1837,10 +1829,8 @@ error_trans:
 	kfree(device);
 error:
 	blkdev_put(bdev, FMODE_EXCL);
-	if (seeding_dev) {
+	if (seed_fs)
 		mutex_unlock(&uuid_mutex);
-		up_write(&sb->s_umount);
-	}
 	return ret;
 }
 

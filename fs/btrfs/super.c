@@ -1116,8 +1116,9 @@ static struct dentry *btrfs_mount(struct file_system_type *fs_type, int flags,
 		goto error_fs_info;
 
 	if (!(flags & MS_RDONLY) && fs_devices->rw_devices == 0) {
-		error = -EACCES;
-		goto error_close_devices;
+		flags |= MS_RDONLY;
+		printk(KERN_INFO "Btrfs detected seed filesystem, force it to "
+				 "be READONLY\n");
 	}
 
 	bdev = fs_devices->latest_bdev;

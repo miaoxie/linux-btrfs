@@ -2218,13 +2218,14 @@ out:
 	return ret;
 }
 
-static long btrfs_ioctl_add_dev(struct btrfs_root *root, void __user *arg)
+static int btrfs_common_add_device(struct file *file, struct btrfs_root *root,
+				   const char *devname)
 {
-	struct btrfs_ioctl_vol_args *vol_args;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	mutex_lock(&root->fs_info->volume_mutex);
 	if (root->fs_info->balance_ctl) {
@@ -2233,18 +2234,76 @@ static long btrfs_ioctl_add_dev(struct btrfs_root *root, void __user *arg)
 		goto out;
 	}
 
-	vol_args = memdup_user(arg, sizeof(*vol_args));
-	if (IS_ERR(vol_args)) {
-		ret = PTR_ERR(vol_args);
+	ret = btrfs_init_new_device(root, devname, false);
+out:
+	mutex_unlock(&root->fs_info->volume_mutex);
+	return ret;
+}
+
+static int btrfs_seed_add_device(struct file *file, struct btrfs_root *root,
+				 const char *devname)
+{
+	struct super_block *sb = root->fs_info->sb;
+	int ret;
+
+	sb_start_write(sb);
+
+	mutex_lock(&root->fs_info->volume_mutex);
+	/*
+	 * Some one may add a new device into a seed fs, and make a
+	 * new fs, so let's add the device by the common method.
+	 */
+	if (!root->fs_info->fs_devices->seeding) {
+		mutex_unlock(&root->fs_info->volume_mutex);
+		sb_end_write(sb);
+		return btrfs_common_add_device(file, root, devname);
+	}
+
+	down_write(&sb->s_umount);
+	if (file->f_path.mnt->mnt_flags & MNT_READONLY) {
+		ret = -EROFS;
 		goto out;
 	}
 
+	if (root->fs_info->balance_ctl) {
+		printk(KERN_INFO "btrfs: balance in progress\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = btrfs_init_new_device(root, devname, true);
+	if (!ret) {
+		sb->s_flags &= ~MS_RDONLY;
+		printk(KERN_INFO "Btrfs created a new filesystem based on "
+				 "seed filesystem.");
+	}
+out:
+	up_write(&sb->s_umount);
+	mutex_unlock(&root->fs_info->volume_mutex);
+	sb_end_write(sb);
+	return ret;
+}
+
+static long btrfs_ioctl_add_dev(struct file *file, void __user *arg)
+{
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
+	struct btrfs_ioctl_vol_args *vol_args;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	vol_args = memdup_user(arg, sizeof(*vol_args));
+	if (IS_ERR(vol_args))
+		return PTR_ERR(vol_args);
 	vol_args->name[BTRFS_PATH_NAME_MAX] = '\0';
-	ret = btrfs_init_new_device(root, vol_args->name);
+
+	if (root->fs_info->fs_state & BTRFS_SUPER_FLAG_SEEDING)
+		ret = btrfs_seed_add_device(file, root, vol_args->name);
+	else
+		ret = btrfs_common_add_device(file, root, vol_args->name);
 
 	kfree(vol_args);
-out:
-	mutex_unlock(&root->fs_info->volume_mutex);
 	return ret;
 }
 
@@ -3800,7 +3859,7 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_RESIZE:
 		return btrfs_ioctl_resize(file, argp);
 	case BTRFS_IOC_ADD_DEV:
-		return btrfs_ioctl_add_dev(root, argp);
+		return btrfs_ioctl_add_dev(file, argp);
 	case BTRFS_IOC_RM_DEV:
 		return btrfs_ioctl_rm_dev(file, argp);
 	case BTRFS_IOC_FS_INFO:
