@@ -2248,16 +2248,18 @@ out:
 	return ret;
 }
 
-static long btrfs_ioctl_rm_dev(struct btrfs_root *root, void __user *arg)
+static long btrfs_ioctl_rm_dev(struct file *file, void __user *arg)
 {
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_vol_args *vol_args;
 	int ret;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	mutex_lock(&root->fs_info->volume_mutex);
 	if (root->fs_info->balance_ctl) {
@@ -2278,6 +2280,7 @@ static long btrfs_ioctl_rm_dev(struct btrfs_root *root, void __user *arg)
 	kfree(vol_args);
 out:
 	mutex_unlock(&root->fs_info->volume_mutex);
+	mnt_drop_write_file(file);
 	return ret;
 }
 
@@ -3766,7 +3769,7 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_ADD_DEV:
 		return btrfs_ioctl_add_dev(root, argp);
 	case BTRFS_IOC_RM_DEV:
-		return btrfs_ioctl_rm_dev(root, argp);
+		return btrfs_ioctl_rm_dev(file, argp);
 	case BTRFS_IOC_FS_INFO:
 		return btrfs_ioctl_fs_info(root, argp);
 	case BTRFS_IOC_DEV_INFO:
