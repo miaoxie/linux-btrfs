@@ -3481,8 +3481,9 @@ out:
 	return ret;
 }
 
-static long btrfs_ioctl_quota_ctl(struct btrfs_root *root, void __user *arg)
+static long btrfs_ioctl_quota_ctl(struct file *file, void __user *arg)
 {
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_quota_ctl_args *sa;
 	struct btrfs_trans_handle *trans = NULL;
 	int ret;
@@ -3491,12 +3492,15 @@ static long btrfs_ioctl_quota_ctl(struct btrfs_root *root, void __user *arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	sa = memdup_user(arg, sizeof(*sa));
-	if (IS_ERR(sa))
-		return PTR_ERR(sa);
+	if (IS_ERR(sa)) {
+		ret = PTR_ERR(sa);
+		goto drop_write;
+	}
 
 	if (sa->cmd != BTRFS_QUOTA_CTL_RESCAN) {
 		trans = btrfs_start_transaction(root, 2);
@@ -3529,14 +3533,16 @@ static long btrfs_ioctl_quota_ctl(struct btrfs_root *root, void __user *arg)
 		if (err && !ret)
 			ret = err;
 	}
-
 out:
 	kfree(sa);
+drop_write:
+	mnt_drop_write_file(file);
 	return ret;
 }
 
-static long btrfs_ioctl_qgroup_assign(struct btrfs_root *root, void __user *arg)
+static long btrfs_ioctl_qgroup_assign(struct file *file, void __user *arg)
 {
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_qgroup_assign_args *sa;
 	struct btrfs_trans_handle *trans;
 	int ret;
@@ -3545,12 +3551,15 @@ static long btrfs_ioctl_qgroup_assign(struct btrfs_root *root, void __user *arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	sa = memdup_user(arg, sizeof(*sa));
-	if (IS_ERR(sa))
-		return PTR_ERR(sa);
+	if (IS_ERR(sa)) {
+		ret = PTR_ERR(sa);
+		goto drop_write;
+	}
 
 	trans = btrfs_join_transaction(root);
 	if (IS_ERR(trans)) {
@@ -3573,11 +3582,14 @@ static long btrfs_ioctl_qgroup_assign(struct btrfs_root *root, void __user *arg)
 
 out:
 	kfree(sa);
+drop_write:
+	mnt_drop_write_file(file);
 	return ret;
 }
 
-static long btrfs_ioctl_qgroup_create(struct btrfs_root *root, void __user *arg)
+static long btrfs_ioctl_qgroup_create(struct file *file, void __user *arg)
 {
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_qgroup_create_args *sa;
 	struct btrfs_trans_handle *trans;
 	int ret;
@@ -3586,12 +3598,15 @@ static long btrfs_ioctl_qgroup_create(struct btrfs_root *root, void __user *arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	sa = memdup_user(arg, sizeof(*sa));
-	if (IS_ERR(sa))
-		return PTR_ERR(sa);
+	if (IS_ERR(sa)) {
+		ret = PTR_ERR(sa);
+		goto drop_write;
+	}
 
 	trans = btrfs_join_transaction(root);
 	if (IS_ERR(trans)) {
@@ -3613,11 +3628,14 @@ static long btrfs_ioctl_qgroup_create(struct btrfs_root *root, void __user *arg)
 
 out:
 	kfree(sa);
+drop_write:
+	mnt_drop_write_file(file);
 	return ret;
 }
 
-static long btrfs_ioctl_qgroup_limit(struct btrfs_root *root, void __user *arg)
+static long btrfs_ioctl_qgroup_limit(struct file *file, void __user *arg)
 {
+	struct btrfs_root *root = BTRFS_I(fdentry(file)->d_inode)->root;
 	struct btrfs_ioctl_qgroup_limit_args *sa;
 	struct btrfs_trans_handle *trans;
 	int ret;
@@ -3627,12 +3645,15 @@ static long btrfs_ioctl_qgroup_limit(struct btrfs_root *root, void __user *arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (root->fs_info->sb->s_flags & MS_RDONLY)
-		return -EROFS;
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
 
 	sa = memdup_user(arg, sizeof(*sa));
-	if (IS_ERR(sa))
-		return PTR_ERR(sa);
+	if (IS_ERR(sa)) {
+		ret = PTR_ERR(sa);
+		goto drop_write;
+	}
 
 	trans = btrfs_join_transaction(root);
 	if (IS_ERR(trans)) {
@@ -3655,6 +3676,8 @@ static long btrfs_ioctl_qgroup_limit(struct btrfs_root *root, void __user *arg)
 
 out:
 	kfree(sa);
+drop_write:
+	mnt_drop_write_file(file);
 	return ret;
 }
 
@@ -3830,13 +3853,13 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_GET_DEV_STATS:
 		return btrfs_ioctl_get_dev_stats(root, argp);
 	case BTRFS_IOC_QUOTA_CTL:
-		return btrfs_ioctl_quota_ctl(root, argp);
+		return btrfs_ioctl_quota_ctl(file, argp);
 	case BTRFS_IOC_QGROUP_ASSIGN:
-		return btrfs_ioctl_qgroup_assign(root, argp);
+		return btrfs_ioctl_qgroup_assign(file, argp);
 	case BTRFS_IOC_QGROUP_CREATE:
-		return btrfs_ioctl_qgroup_create(root, argp);
+		return btrfs_ioctl_qgroup_create(file, argp);
 	case BTRFS_IOC_QGROUP_LIMIT:
-		return btrfs_ioctl_qgroup_limit(root, argp);
+		return btrfs_ioctl_qgroup_limit(file, argp);
 	}
 
 	return -ENOTTY;
