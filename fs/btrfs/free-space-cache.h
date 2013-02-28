@@ -40,6 +40,19 @@ struct btrfs_free_space_ctl {
 	void *private;
 };
 
+enum btrfs_free_space_root_types {
+	BTRFS_FREE_SPACE_CACHE_ROOT,
+	BTRFS_FREE_SPACE_CLUSTER_ROOT,
+};
+
+struct btrfs_free_cluster;
+
+struct btrfs_free_space_iter {
+	enum btrfs_free_space_root_types type;
+	struct btrfs_free_space *space_info;
+	struct btrfs_free_cluster *cur_cluster;
+};
+
 struct btrfs_free_space_op {
 	void (*recalc_thresholds)(struct btrfs_free_space_ctl *ctl);
 	bool (*use_bitmap)(struct btrfs_free_space_ctl *ctl,

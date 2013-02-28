@@ -853,6 +853,120 @@ out:
 	return ret;
 }
 
+static struct rb_root *
+__btrfs_free_space_select_root(struct btrfs_free_space_ctl *ctl,
+			       struct btrfs_block_group_cache *block_group,
+			       struct btrfs_free_space_iter *iter)
+{
+	struct rb_root *root;
+	struct btrfs_free_cluster *cluster;
+
+	switch (iter->type) {
+	case BTRFS_FREE_SPACE_CACHE_ROOT:
+		root = &ctl->free_space_offset;
+		break;
+	case BTRFS_FREE_SPACE_CLUSTER_ROOT:
+		if (!block_group ||
+		    list_empty(&block_group->cluster_list)) {
+			root = NULL;
+			break;
+		}
+
+		cluster = iter->cur_cluster;
+		if (!cluster) {
+			cluster = list_entry(block_group->cluster_list.next,
+					     struct btrfs_free_cluster,
+					     block_group_list);
+		} else if (!list_is_last(&cluster->block_group_list,
+					 &block_group->cluster_list)) {
+			cluster = list_entry(cluster->block_group_list.next,
+					     struct btrfs_free_cluster,
+					     block_group_list);
+		} else {
+			cluster = NULL;
+		}
+
+		iter->cur_cluster = cluster;
+		if (iter->cur_cluster)
+			root = &iter->cur_cluster->root;
+		else
+			root = NULL;
+		break;
+	default:
+		root = NULL;
+		break;
+	}
+
+	return root;
+}
+
+static void
+__btrfs_free_space_iter_start(struct btrfs_free_space_ctl *ctl,
+			      struct btrfs_block_group_cache *block_group,
+			      struct btrfs_free_space_iter *iter)
+{
+	iter->type = BTRFS_FREE_SPACE_CACHE_ROOT;
+	iter->space_info = NULL;
+	iter->cur_cluster = NULL;
+}
+
+static struct btrfs_free_space *
+__btrfs_free_space_iter_next(struct btrfs_free_space_ctl *ctl,
+			     struct btrfs_block_group_cache *block_group,
+			     struct btrfs_free_space_iter *iter)
+{
+	struct btrfs_free_space *free_space;
+	struct rb_node *node;
+	struct rb_root *root;
+
+	if (iter->space_info) {
+		node = rb_next(&iter->space_info->offset_index);
+	} else {
+		root = __btrfs_free_space_select_root(ctl, block_group, iter);
+		if (root)
+			node = rb_first(root);
+		else
+			node = NULL;
+	}
+
+	if (!node) {
+again:
+		/*
+		 * Though we just have one cluster in the block group now,
+		 * we may introduce more clusters in the future. So the
+		 * iteration of the cluster is different with the others,
+		 * we need go through all the clusters.
+		 */
+		if (iter->type != BTRFS_FREE_SPACE_CLUSTER_ROOT)
+			iter->type++;
+		root = __btrfs_free_space_select_root(ctl, block_group, iter);
+		if (root) {
+			node = rb_first(root);
+			if (!node)
+				goto again;
+		} else {
+			node = NULL;
+		}
+	}
+
+	if (node)
+		free_space = rb_entry(node, struct btrfs_free_space,
+				      offset_index);
+	else
+		free_space = NULL;
+	iter->space_info = free_space;
+
+	return free_space;
+}
+
+/*
+ * This is empty function which is used to make the logical
+ * more readable.
+ */
+static inline void __btrfs_free_space_iter_end(void)
+{
+}
+
 /**
  * __btrfs_write_out_cache - write out cached info to an inode
  * @root - the root the inode belongs to
@@ -874,11 +988,11 @@ int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
 {
 	struct btrfs_free_space_header *header;
 	struct extent_buffer *leaf;
-	struct rb_node *node;
 	struct list_head *pos, *n;
 	struct extent_state *cached_state = NULL;
-	struct btrfs_free_cluster *cluster = NULL;
 	struct extent_io_tree *unpin = NULL;
+	struct btrfs_free_space *e;
+	struct btrfs_free_space_iter iter;
 	struct io_ctl io_ctl;
 	struct list_head bitmap_list;
 	struct btrfs_key key;
@@ -897,23 +1011,11 @@ int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
 	if (ret)
 		return -1;
 
-	/* Get the cluster for this block_group if it exists */
-	if (block_group && !list_empty(&block_group->cluster_list))
-		cluster = list_entry(block_group->cluster_list.next,
-				     struct btrfs_free_cluster,
-				     block_group_list);
-
 	/* Lock all pages first so we can lock the extent safely. */
 	io_ctl_prepare_pages(&io_ctl, inode, 0);
 
 	lock_extent_bits(&BTRFS_I(inode)->io_tree, 0, i_size_read(inode) - 1,
 			 0, &cached_state);
-
-	node = rb_first(&ctl->free_space_offset);
-	if (!node && cluster) {
-		node = rb_first(&cluster->root);
-		cluster = NULL;
-	}
 
 	/* Make sure we can fit our crcs into the first page */
 	if (io_ctl.check_crcs &&
@@ -925,27 +1027,22 @@ int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
 	io_ctl_set_generation(&io_ctl, trans->transid);
 
 	/* Write out the extent entries */
-	while (node) {
-		struct btrfs_free_space *e;
-
-		e = rb_entry(node, struct btrfs_free_space, offset_index);
+	__btrfs_free_space_iter_start(ctl, block_group, &iter);
+	while ((e = __btrfs_free_space_iter_next(ctl, block_group, &iter))) {
 		entries++;
-
 		ret = io_ctl_add_entry(&io_ctl, e->offset, e->bytes,
 				       e->bitmap);
-		if (ret)
+		if (ret) {
+			__btrfs_free_space_iter_end();
 			goto out_nospc;
+		}
 
 		if (e->bitmap) {
 			list_add_tail(&e->list, &bitmap_list);
 			bitmaps++;
 		}
-		node = rb_next(node);
-		if (!node && cluster) {
-			node = rb_first(&cluster->root);
-			cluster = NULL;
-		}
 	}
+	__btrfs_free_space_iter_end();
 
 	/*
 	 * We want to add any pinned extents to our free space cache
