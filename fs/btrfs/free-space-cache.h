@@ -20,7 +20,7 @@
 #define __BTRFS_FREE_SPACE_CACHE
 
 struct btrfs_free_space {
-	struct rb_node offset_index;
+	struct rb_node node;
 	u64 offset;
 	u64 bytes;
 	unsigned long *bitmap;
@@ -29,7 +29,8 @@ struct btrfs_free_space {
 
 struct btrfs_free_space_ctl {
 	spinlock_t tree_lock;
-	struct rb_root free_space_offset;
+	struct rb_root extent_root;
+	struct rb_root bitmap_root;
 	u64 free_space;
 	int extents_thresh;
 	int free_extents;
@@ -41,7 +42,8 @@ struct btrfs_free_space_ctl {
 };
 
 enum btrfs_free_space_root_types {
-	BTRFS_FREE_SPACE_CACHE_ROOT,
+	BTRFS_FREE_SPACE_EXTENT_ROOT,
+	BTRFS_FREE_SPACE_BITMAP_ROOT,
 	BTRFS_FREE_SPACE_CLUSTER_ROOT,
 };
 

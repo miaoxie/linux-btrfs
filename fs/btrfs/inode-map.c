@@ -257,7 +257,7 @@ again:
 void btrfs_unpin_free_ino(struct btrfs_root *root)
 {
 	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
-	struct rb_root *rbroot = &root->free_ino_pinned->free_space_offset;
+	struct rb_root *rbroot = &root->free_ino_pinned->extent_root;
 	struct btrfs_free_space *info;
 	struct rb_node *n;
 	u64 count;
@@ -265,13 +265,14 @@ void btrfs_unpin_free_ino(struct btrfs_root *root)
 	if (!btrfs_test_opt(root, INODE_MAP_CACHE))
 		return;
 
+	BUG_ON(!RB_EMPTY_ROOT(&root->free_ino_pinned->bitmap_root));
+
 	while (1) {
 		n = rb_first(rbroot);
 		if (!n)
 			break;
 
-		info = rb_entry(n, struct btrfs_free_space, offset_index);
-		BUG_ON(info->bitmap); /* Logic error */
+		info = rb_entry(n, struct btrfs_free_space, node);
 
 		if (info->offset > root->cache_progress)
 			goto free;
@@ -282,7 +283,7 @@ void btrfs_unpin_free_ino(struct btrfs_root *root)
 
 		__btrfs_add_free_space(ctl, info->offset, count);
 free:
-		rb_erase(&info->offset_index, rbroot);
+		rb_erase(&info->node, rbroot);
 		kfree(info);
 	}
 }
@@ -301,12 +302,18 @@ static void recalculate_thresholds(struct btrfs_free_space_ctl *ctl)
 	int max_ino;
 	int max_bitmaps;
 
-	n = rb_last(&ctl->free_space_offset);
-	if (!n) {
+	if (RB_EMPTY_ROOT(&ctl->extent_root) &&
+	    RB_EMPTY_ROOT(&ctl->bitmap_root)) {
 		ctl->extents_thresh = INIT_THRESHOLD;
 		return;
 	}
-	info = rb_entry(n, struct btrfs_free_space, offset_index);
+
+	n = rb_last(&ctl->extent_root);
+	if (!n)
+		n = rb_last(&ctl->bitmap_root);
+	BUG_ON(!n);
+
+	info = rb_entry(n, struct btrfs_free_space, node);
 
 	/*
 	 * Find the maximum inode number in the filesystem. Note we
