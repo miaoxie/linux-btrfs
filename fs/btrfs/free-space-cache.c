@@ -34,7 +34,9 @@
 #define BYTES_PER_BITMAP(ctl)		(BITS_PER_BITMAP << ctl->unit_shift)
 #define BYTES_PER_BITMAP_SHIFT(ctl)	(BITS_PER_BITMAP_SHIFT + \
 					 ctl->unit_shift)
-#define MAX_CACHE_BYTES_PER_GIG		(32 * 1024)
+#define MAX_CACHE_BYTES_PER_GIG(ctl)	(1 << (30 - ctl->unit_shift -	\
+					       BITS_PER_BITMAP_SHIFT +	\
+					       PAGE_CACHE_SHIFT))
 
 static int link_free_space(struct btrfs_free_space_ctl *ctl,
 			   struct btrfs_free_space *info);
@@ -1418,9 +1420,9 @@ static void recalculate_thresholds(struct btrfs_free_space_ctl *ctl)
 	 * used by extent based free space tracking
 	 */
 	if (size < 1024 * 1024 * 1024)
-		max_bytes = MAX_CACHE_BYTES_PER_GIG;
+		max_bytes = MAX_CACHE_BYTES_PER_GIG(ctl);
 	else
-		max_bytes = MAX_CACHE_BYTES_PER_GIG *
+		max_bytes = MAX_CACHE_BYTES_PER_GIG(ctl) *
 			    DIV_ROUND_UP_SHIFT(size, 30);
 
 	/*
