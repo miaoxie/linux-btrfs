@@ -36,6 +36,7 @@ struct btrfs_free_space_ctl {
 	int free_extents;
 	int total_bitmaps;
 	int unit;
+	int unit_shift;
 	u64 start;
 	struct btrfs_free_space_op *op;
 	void *private;

@@ -41,4 +41,6 @@ static inline u64 div_factor_fine(u64 num, int factor)
 	return num;
 }
 
+/* num should not be 0 */
+#define DIV_ROUND_UP_SHIFT(num, shift) (((num - 1) >> shift) + 1)
 #endif

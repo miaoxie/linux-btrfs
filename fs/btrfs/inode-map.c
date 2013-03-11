@@ -380,6 +380,7 @@ void btrfs_init_free_ino_ctl(struct btrfs_root *root)
 
 	spin_lock_init(&ctl->tree_lock);
 	ctl->unit = 1;
+	ctl->unit_shift = 0;
 	ctl->start = 0;
 	ctl->private = NULL;
 	ctl->op = &free_ino_op;
@@ -393,6 +394,7 @@ void btrfs_init_free_ino_ctl(struct btrfs_root *root)
 
 	spin_lock_init(&pinned->tree_lock);
 	pinned->unit = 1;
+	pinned->unit_shift = 0;
 	pinned->start = 0;
 	pinned->private = NULL;
 	pinned->extents_thresh = 0;
