@@ -276,7 +276,7 @@ struct io_ctl {
 	struct page *page;
 	struct page **pages;
 	struct btrfs_root *root;
-	unsigned long size;
+	int size;
 	int index;
 	int num_pages;
 	unsigned check_crcs:1;
@@ -372,58 +372,6 @@ static int io_ctl_prepare_pages(struct io_ctl *io_ctl, struct inode *inode,
 	return 0;
 }
 
-static void io_ctl_set_generation(struct io_ctl *io_ctl, u64 generation)
-{
-	__le64 *val;
-
-	io_ctl_map_page(io_ctl, 1);
-
-	/*
-	 * Skip the csum areas.  If we don't check crcs then we just have a
-	 * 64bit chunk at the front of the first page.
-	 */
-	if (io_ctl->check_crcs) {
-		io_ctl->cur += (sizeof(u32) * io_ctl->num_pages);
-		io_ctl->size -= sizeof(u64) + (sizeof(u32) * io_ctl->num_pages);
-	} else {
-		io_ctl->cur += sizeof(u64);
-		io_ctl->size -= sizeof(u64) * 2;
-	}
-
-	val = io_ctl->cur;
-	*val = cpu_to_le64(generation);
-	io_ctl->cur += sizeof(u64);
-}
-
-static int io_ctl_check_generation(struct io_ctl *io_ctl, u64 generation)
-{
-	__le64 *gen;
-
-	/*
-	 * Skip the crc area.  If we don't check crcs then we just have a 64bit
-	 * chunk at the front of the first page.
-	 */
-	if (io_ctl->check_crcs) {
-		io_ctl->cur += sizeof(u32) * io_ctl->num_pages;
-		io_ctl->size -= sizeof(u64) +
-			(sizeof(u32) * io_ctl->num_pages);
-	} else {
-		io_ctl->cur += sizeof(u64);
-		io_ctl->size -= sizeof(u64) * 2;
-	}
-
-	gen = io_ctl->cur;
-	if (le64_to_cpu(*gen) != generation) {
-		printk_ratelimited(KERN_ERR "btrfs: space cache generation "
-				   "(%Lu) does not match inode (%Lu)\n", *gen,
-				   generation);
-		io_ctl_unmap_page(io_ctl);
-		return -EIO;
-	}
-	io_ctl->cur += sizeof(u64);
-	return 0;
-}
-
 static void io_ctl_set_crc(struct io_ctl *io_ctl, int index)
 {
 	u32 *tmp;
@@ -435,8 +383,14 @@ static void io_ctl_set_crc(struct io_ctl *io_ctl, int index)
 		return;
 	}
 
-	if (index == 0)
+	if (index == 0) {
 		offset = sizeof(u32) * io_ctl->num_pages;
+		/*
+		 * The current page is full of CRCs, we have skipped it
+		 * in the caller.
+		 */
+		BUG_ON(unlikely(PAGE_CACHE_SIZE - offset < sizeof(u64)));
+	}
 
 	crc = btrfs_csum_data(io_ctl->root, io_ctl->orig + offset, crc,
 			      PAGE_CACHE_SIZE - offset);
@@ -459,8 +413,14 @@ static int io_ctl_check_crc(struct io_ctl *io_ctl, int index)
 		return 0;
 	}
 
-	if (index == 0)
+	if (index == 0) {
 		offset = sizeof(u32) * io_ctl->num_pages;
+		/*
+		 * The current page is full of CRCs, we have skipped it
+		 * in the caller.
+		 */
+		BUG_ON(unlikely(PAGE_CACHE_SIZE - offset < sizeof(u64)));
+	}
 
 	tmp = kmap(io_ctl->pages[0]);
 	tmp += index;
@@ -478,6 +438,98 @@ static int io_ctl_check_crc(struct io_ctl *io_ctl, int index)
 		return -EIO;
 	}
 
+	return 0;
+}
+
+static void io_ctl_set_generation(struct io_ctl *io_ctl, u64 generation)
+{
+	__le64 *val;
+
+	io_ctl_map_page(io_ctl, 1);
+
+	/*
+	 * Skip the csum areas.  If we don't check crcs then we just have a
+	 * 64bit chunk at the front of the first page.
+	 */
+	if (io_ctl->check_crcs) {
+		io_ctl->cur += (sizeof(u32) * io_ctl->num_pages);
+		io_ctl->size -= sizeof(u64) + (sizeof(u32) * io_ctl->num_pages);
+	} else {
+		io_ctl->cur += sizeof(u64);
+		io_ctl->size -= sizeof(u64) * 2;
+	}
+	/* The current page is full of CRCs */
+	if (unlikely(io_ctl->size < 0)) {
+		/*
+		 * needn't calc CRC because it is a page in which
+		 * there are only CRCs.
+		 */
+		io_ctl_unmap_page(io_ctl);
+		io_ctl_map_page(io_ctl, 1);
+		io_ctl->size -= sizeof(u64);
+	}
+
+	val = io_ctl->cur;
+	*val = cpu_to_le64(generation);
+	io_ctl->cur += sizeof(u64);
+
+	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
+		return;
+
+	io_ctl_set_crc(io_ctl, io_ctl->index - 1);
+
+	/* map the next page */
+	io_ctl_map_page(io_ctl, 1);
+}
+
+static int io_ctl_check_generation(struct io_ctl *io_ctl, u64 generation)
+{
+	__le64 *gen;
+	int offset;
+	int ret;
+
+	/*
+	 * Skip the crc area.  If we don't check crcs then we just have a 64bit
+	 * chunk at the front of the first page.
+	 */
+	if (io_ctl->check_crcs)
+		offset = sizeof(u32) * io_ctl->num_pages;
+	else
+		offset = sizeof(u64);
+
+	/* The current page is full of CRCs */
+	if (unlikely(offset > PAGE_CACHE_SIZE - sizeof(64))) {
+		/*
+		 * needn't calc CRC of the first page because there are
+		 * only CRCs on it.
+		 */
+		io_ctl->index++;
+		ret = io_ctl_check_crc(io_ctl, 1);
+		if (ret)
+			return ret;
+		io_ctl->size -= sizeof(u64);
+	} else {
+		ret = io_ctl_check_crc(io_ctl, 0);
+		if (ret)
+			return ret;
+		io_ctl->size -= offset + sizeof(u64);
+		io_ctl->cur += offset;
+	}
+
+	gen = io_ctl->cur;
+	if (le64_to_cpu(*gen) != generation) {
+		printk_ratelimited(KERN_ERR "btrfs: space cache generation "
+				   "(%Lu) does not match inode (%Lu)\n", *gen,
+				   generation);
+		io_ctl_unmap_page(io_ctl);
+		return -EIO;
+	}
+	io_ctl->cur += sizeof(u64);
+
+	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
+		return 0;
+
+	io_ctl_unmap_page(io_ctl);
 	return 0;
 }
 
@@ -701,10 +753,6 @@ int __load_free_space_cache(struct btrfs_root *root, struct inode *inode,
 	ret = io_ctl_prepare_pages(&io_ctl, inode, 1);
 	if (ret)
 		goto out;
-
-	ret = io_ctl_check_crc(&io_ctl, 0);
-	if (ret)
-		goto free_cache;
 
 	ret = io_ctl_check_generation(&io_ctl, generation);
 	if (ret)
