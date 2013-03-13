@@ -3289,7 +3289,7 @@ truncate:
 		goto out;
 	}
 
-	ret = btrfs_truncate_free_space_cache(root, trans, path, inode);
+	ret = btrfs_truncate_cache(root, trans, path, inode);
 
 	btrfs_free_path(path);
 	btrfs_end_transaction(trans, root);
@@ -4026,8 +4026,8 @@ int btrfs_relocate_block_group(struct btrfs_root *extent_root, u64 group_start)
 		goto out;
 	}
 
-	inode = lookup_free_space_inode(fs_info->tree_root, rc->block_group,
-					path);
+	inode = btrfs_lookup_free_space_inode(fs_info->tree_root,
+					      rc->block_group, path);
 	btrfs_free_path(path);
 
 	if (!IS_ERR(inode))

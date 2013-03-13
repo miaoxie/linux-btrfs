@@ -136,6 +136,79 @@ out:
 	return ret;
 }
 
+static struct inode *lookup_free_ino_inode(struct btrfs_root *root,
+					   struct btrfs_path *path)
+{
+	struct inode *inode = NULL;
+
+	spin_lock(&root->cache_lock);
+	if (root->cache_inode)
+		inode = igrab(root->cache_inode);
+	spin_unlock(&root->cache_lock);
+	if (inode)
+		return inode;
+
+	inode = btrfs_lookup_cache_inode(root, path, 0);
+	if (IS_ERR(inode))
+		return inode;
+
+	spin_lock(&root->cache_lock);
+	if (!btrfs_fs_closing(root->fs_info))
+		root->cache_inode = igrab(inode);
+	spin_unlock(&root->cache_lock);
+
+	return inode;
+}
+
+int create_free_ino_inode(struct btrfs_root *root,
+			  struct btrfs_trans_handle *trans,
+			  struct btrfs_path *path)
+{
+	return btrfs_create_cache_inode(root, trans, path,
+					BTRFS_FREE_INO_OBJECTID, 0);
+}
+
+int load_free_ino_cache(struct btrfs_fs_info *fs_info, struct btrfs_root *root)
+{
+	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
+	struct btrfs_path *path;
+	struct inode *inode;
+	int ret = 0;
+	u64 root_gen = btrfs_root_generation(&root->root_item);
+
+	if (!btrfs_test_opt(root, INODE_MAP_CACHE))
+		return 0;
+
+	/*
+	 * If we're unmounting then just return, since this does a search on the
+	 * normal root and not the commit root and we could deadlock.
+	 */
+	if (btrfs_fs_closing(fs_info))
+		return 0;
+
+	path = btrfs_alloc_path();
+	if (!path)
+		return 0;
+
+	inode = lookup_free_ino_inode(root, path);
+	if (IS_ERR(inode))
+		goto out;
+
+	if (root_gen != BTRFS_I(inode)->generation)
+		goto out_put;
+
+	ret = btrfs_load_cache(root, inode, ctl, path, 0);
+
+	if (ret < 0)
+		pr_err("btrfs: failed to load free ino cache for root %llu\n",
+		       root->root_key.objectid);
+out_put:
+	iput(inode);
+out:
+	btrfs_free_path(path);
+	return ret;
+}
+
 static void start_caching(struct btrfs_root *root)
 {
 	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
@@ -187,8 +260,14 @@ int btrfs_find_free_ino(struct btrfs_root *root, u64 *objectid)
 		return btrfs_find_free_objectid(root, objectid);
 
 again:
-	*objectid = btrfs_find_ino_for_alloc(root);
-
+	/*
+	 * Find the left-most item in the cache tree, and then return the
+	 * smallest inode number in the item.
+	 *
+	 * Note: the returned inode number may not be the smallest one in
+	 * the tree, if the left-most item is a bitmap.
+	 */
+	*objectid = btrfs_alloc_unit_from_left(root->free_ino_ctl);
 	if (*objectid != 0)
 		return 0;
 
@@ -401,6 +480,35 @@ void btrfs_init_free_ino_ctl(struct btrfs_root *root)
 	pinned->op = &pinned_free_ino_op;
 }
 
+
+static int btrfs_write_out_ino_cache(struct btrfs_root *root,
+				     struct btrfs_trans_handle *trans,
+				     struct btrfs_path *path)
+{
+	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
+	struct inode *inode;
+	int ret;
+
+	if (!btrfs_test_opt(root, INODE_MAP_CACHE))
+		return 0;
+
+	inode = lookup_free_ino_inode(root, path);
+	if (IS_ERR(inode))
+		return 0;
+
+	ret = btrfs_write_out_cache(root, inode, ctl, NULL, trans, path, 0);
+	if (ret) {
+		btrfs_delalloc_release_metadata(inode, inode->i_size);
+#ifdef DEBUG
+		pr_err("btrfs: failed to write free ino cache for root %llu\n",
+		       root->root_key.objectid);
+#endif
+	}
+
+	iput(inode);
+	return ret;
+}
+
 int btrfs_save_ino_cache(struct btrfs_root *root,
 			 struct btrfs_trans_handle *trans)
 {
@@ -475,7 +583,7 @@ again:
 	}
 
 	if (i_size_read(inode) > 0) {
-		ret = btrfs_truncate_free_space_cache(root, trans, path, inode);
+		ret = btrfs_truncate_cache(root, trans, path, inode);
 		if (ret) {
 			btrfs_abort_transaction(trans, root, ret);
 			goto out_put;
@@ -584,3 +692,5 @@ out:
 	mutex_unlock(&root->objectid_mutex);
 	return ret;
 }
+
+

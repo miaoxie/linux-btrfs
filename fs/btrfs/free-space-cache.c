@@ -47,9 +47,9 @@ static int link_free_space(struct btrfs_free_space_ctl *ctl,
 static void __unlink_free_space(struct btrfs_free_space_ctl *ctl,
 				struct btrfs_free_space *info);
 
-static struct inode *__lookup_free_space_inode(struct btrfs_root *root,
-					       struct btrfs_path *path,
-					       u64 offset)
+struct inode *btrfs_lookup_cache_inode(struct btrfs_root *root,
+				       struct btrfs_path *path,
+				       u64 offset)
 {
 	struct btrfs_key key;
 	struct btrfs_key location;
@@ -94,45 +94,45 @@ static struct inode *__lookup_free_space_inode(struct btrfs_root *root,
 	return inode;
 }
 
-struct inode *lookup_free_space_inode(struct btrfs_root *root,
-				      struct btrfs_block_group_cache
-				      *block_group, struct btrfs_path *path)
+struct inode *btrfs_lookup_free_space_inode(struct btrfs_root *root,
+					    struct btrfs_block_group_cache *bg,
+					    struct btrfs_path *path)
 {
 	struct inode *inode = NULL;
 	u32 flags = BTRFS_INODE_NODATASUM | BTRFS_INODE_NODATACOW;
 
-	spin_lock(&block_group->lock);
-	if (block_group->inode)
-		inode = igrab(block_group->inode);
-	spin_unlock(&block_group->lock);
+	spin_lock(&bg->lock);
+	if (bg->inode)
+		inode = igrab(bg->inode);
+	spin_unlock(&bg->lock);
 	if (inode)
 		return inode;
 
-	inode = __lookup_free_space_inode(root, path,
-					  block_group->key.objectid);
+	inode = btrfs_lookup_cache_inode(root, path,
+					 bg->key.objectid);
 	if (IS_ERR(inode))
 		return inode;
 
-	spin_lock(&block_group->lock);
+	spin_lock(&bg->lock);
 	if (!((BTRFS_I(inode)->flags & flags) == flags)) {
 		printk(KERN_INFO "Old style space inode found, converting.\n");
 		BTRFS_I(inode)->flags |= BTRFS_INODE_NODATASUM |
 			BTRFS_INODE_NODATACOW;
-		block_group->disk_cache_state = BTRFS_DC_CLEAR;
+		bg->disk_cache_state = BTRFS_DC_CLEAR;
 	}
 
-	if (!block_group->iref) {
-		block_group->inode = igrab(inode);
-		block_group->iref = 1;
+	if (!bg->iref) {
+		bg->inode = igrab(inode);
+		bg->iref = 1;
 	}
-	spin_unlock(&block_group->lock);
+	spin_unlock(&bg->lock);
 
 	return inode;
 }
 
-int __create_free_space_inode(struct btrfs_root *root,
-			      struct btrfs_trans_handle *trans,
-			      struct btrfs_path *path, u64 ino, u64 offset)
+int btrfs_create_cache_inode(struct btrfs_root *root,
+			     struct btrfs_trans_handle *trans,
+			     struct btrfs_path *path, u64 ino, u64 offset)
 {
 	struct btrfs_key key;
 	struct btrfs_disk_key disk_key;
@@ -190,10 +190,10 @@ int __create_free_space_inode(struct btrfs_root *root,
 	return 0;
 }
 
-int create_free_space_inode(struct btrfs_root *root,
-			    struct btrfs_trans_handle *trans,
-			    struct btrfs_block_group_cache *block_group,
-			    struct btrfs_path *path)
+int btrfs_create_free_space_inode(struct btrfs_root *root,
+				  struct btrfs_trans_handle *trans,
+				  struct btrfs_block_group_cache *block_group,
+				  struct btrfs_path *path)
 {
 	int ret;
 	u64 ino;
@@ -202,14 +202,14 @@ int create_free_space_inode(struct btrfs_root *root,
 	if (ret < 0)
 		return ret;
 
-	return __create_free_space_inode(root, trans, path, ino,
-					 block_group->key.objectid);
+	return btrfs_create_cache_inode(root, trans, path, ino,
+					block_group->key.objectid);
 }
 
-int btrfs_truncate_free_space_cache(struct btrfs_root *root,
-				    struct btrfs_trans_handle *trans,
-				    struct btrfs_path *path,
-				    struct inode *inode)
+int btrfs_truncate_cache(struct btrfs_root *root,
+			 struct btrfs_trans_handle *trans,
+			 struct btrfs_path *path,
+			 struct inode *inode)
 {
 	struct btrfs_block_rsv *rsv;
 	u64 needed_bytes;
@@ -714,9 +714,9 @@ out:
 	spin_unlock(&ctl->tree_lock);
 }
 
-int __load_free_space_cache(struct btrfs_root *root, struct inode *inode,
-			    struct btrfs_free_space_ctl *ctl,
-			    struct btrfs_path *path, u64 offset)
+int btrfs_load_cache(struct btrfs_root *root, struct inode *inode,
+		     struct btrfs_free_space_ctl *ctl,
+		     struct btrfs_path *path, u64 offset)
 {
 	struct btrfs_free_space_header *header;
 	struct extent_buffer *leaf;
@@ -865,8 +865,8 @@ free_cache:
 	goto out;
 }
 
-int load_free_space_cache(struct btrfs_fs_info *fs_info,
-			  struct btrfs_block_group_cache *block_group)
+int btrfs_load_free_space_cache(struct btrfs_fs_info *fs_info,
+				struct btrfs_block_group_cache *block_group)
 {
 	struct btrfs_free_space_ctl *ctl = block_group->free_space_ctl;
 	struct btrfs_root *root = fs_info->tree_root;
@@ -893,7 +893,7 @@ int load_free_space_cache(struct btrfs_fs_info *fs_info,
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
-	inode = lookup_free_space_inode(root, block_group, path);
+	inode = btrfs_lookup_free_space_inode(root, block_group, path);
 	if (IS_ERR(inode)) {
 		btrfs_free_path(path);
 		return 0;
@@ -908,8 +908,8 @@ int load_free_space_cache(struct btrfs_fs_info *fs_info,
 	}
 	spin_unlock(&block_group->lock);
 
-	ret = __load_free_space_cache(fs_info->tree_root, inode, ctl,
-				      path, block_group->key.objectid);
+	ret = btrfs_load_cache(fs_info->tree_root, inode, ctl,
+			       path, block_group->key.objectid);
 	btrfs_free_path(path);
 	if (ret <= 0)
 		goto out;
@@ -1059,7 +1059,7 @@ static inline void __btrfs_free_space_iter_end(void)
 }
 
 /**
- * __btrfs_write_out_cache - write out cached info to an inode
+ * btrfs_write_out_cache - write out cached info to an inode
  * @root - the root the inode belongs to
  * @ctl - the free space cache we are going to write out
  * @block_group - the block_group for this cache if it belongs to a block_group
@@ -1071,11 +1071,11 @@ static inline void __btrfs_free_space_iter_end(void)
  * on mount.  This will return 0 if it was successfull in writing the cache out,
  * and -1 if it was not.
  */
-int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
-			    struct btrfs_free_space_ctl *ctl,
-			    struct btrfs_block_group_cache *block_group,
-			    struct btrfs_trans_handle *trans,
-			    struct btrfs_path *path, u64 offset)
+int btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
+			  struct btrfs_free_space_ctl *ctl,
+			  struct btrfs_block_group_cache *block_group,
+			  struct btrfs_trans_handle *trans,
+			  struct btrfs_path *path, u64 offset)
 {
 	struct btrfs_free_space_header *header;
 	struct extent_buffer *leaf;
@@ -1262,38 +1262,38 @@ out_nospc:
 	goto out;
 }
 
-int btrfs_write_out_cache(struct btrfs_root *root,
-			  struct btrfs_trans_handle *trans,
-			  struct btrfs_block_group_cache *block_group,
-			  struct btrfs_path *path)
+int btrfs_write_out_free_space_cache(struct btrfs_root *root,
+				     struct btrfs_trans_handle *trans,
+				     struct btrfs_block_group_cache *bg,
+				     struct btrfs_path *path)
 {
-	struct btrfs_free_space_ctl *ctl = block_group->free_space_ctl;
+	struct btrfs_free_space_ctl *ctl = bg->free_space_ctl;
 	struct inode *inode;
 	int ret = 0;
 
 	root = root->fs_info->tree_root;
 
-	spin_lock(&block_group->lock);
-	if (block_group->disk_cache_state < BTRFS_DC_SETUP) {
-		spin_unlock(&block_group->lock);
+	spin_lock(&bg->lock);
+	if (bg->disk_cache_state < BTRFS_DC_SETUP) {
+		spin_unlock(&bg->lock);
 		return 0;
 	}
-	spin_unlock(&block_group->lock);
+	spin_unlock(&bg->lock);
 
-	inode = lookup_free_space_inode(root, block_group, path);
+	inode = btrfs_lookup_free_space_inode(root, bg, path);
 	if (IS_ERR(inode))
 		return 0;
 
-	ret = __btrfs_write_out_cache(root, inode, ctl, block_group, trans,
-				      path, block_group->key.objectid);
+	ret = btrfs_write_out_cache(root, inode, ctl, bg, trans,
+				    path, bg->key.objectid);
 	if (ret) {
-		spin_lock(&block_group->lock);
-		block_group->disk_cache_state = BTRFS_DC_ERROR;
-		spin_unlock(&block_group->lock);
+		spin_lock(&bg->lock);
+		bg->disk_cache_state = BTRFS_DC_ERROR;
+		spin_unlock(&bg->lock);
 		ret = 0;
 #ifdef DEBUG
-		printk(KERN_ERR "btrfs: failed to write free space cache "
-		       "for block group %llu\n", block_group->key.objectid);
+		pr_err("btrfs: failed to write free space cache for block group %llu\n",
+		       bg->key.objectid);
 #endif
 	}
 
@@ -2912,26 +2912,22 @@ int btrfs_trim_block_group(struct btrfs_block_group_cache *block_group,
 
 /*
  * Find the left-most item in the cache tree, and then return the
- * smallest inode number in the item.
- *
- * Note: the returned inode number may not be the smallest one in
- * the tree, if the left-most item is a bitmap.
+ * smallest unit in the item.
  */
-u64 btrfs_find_ino_for_alloc(struct btrfs_root *fs_root)
+u64 btrfs_alloc_unit_from_left(struct btrfs_free_space_ctl *ctl)
 {
-	struct btrfs_free_space_ctl *ctl = fs_root->free_ino_ctl;
 	struct btrfs_free_space *entry = NULL;
-	u64 ino = 0;
+	u64 result = 0;
 
 	spin_lock(&ctl->tree_lock);
 	if (!RB_EMPTY_ROOT(&ctl->extent_root)) {
 		entry = rb_entry(rb_first(&ctl->extent_root),
 				 struct btrfs_free_space, node);
-		ino = entry->offset;
+		result = entry->offset;
 
-		entry->offset++;
-		entry->bytes--;
-		ctl->free_space--;
+		entry->offset += ctl->unit;
+		entry->bytes -= ctl->unit;
+		ctl->free_space -= ctl->unit;
 		if (!entry->bytes) {
 			__unlink_free_space(ctl, entry);
 			kmem_cache_free(btrfs_free_space_cachep, entry);
@@ -2947,113 +2943,13 @@ u64 btrfs_find_ino_for_alloc(struct btrfs_root *fs_root)
 		/* Logic error; Should be empty if it can't find anything */
 		BUG_ON(ret);
 
-		ino = offset;
+		result = offset;
 		bitmap_clear_bits(ctl, entry, offset, 1);
 		if (entry->bytes == 0)
 			free_bitmap(ctl, entry);
 	}
 	spin_unlock(&ctl->tree_lock);
 
-	return ino;
+	return result;
 }
 
-struct inode *lookup_free_ino_inode(struct btrfs_root *root,
-				    struct btrfs_path *path)
-{
-	struct inode *inode = NULL;
-
-	spin_lock(&root->cache_lock);
-	if (root->cache_inode)
-		inode = igrab(root->cache_inode);
-	spin_unlock(&root->cache_lock);
-	if (inode)
-		return inode;
-
-	inode = __lookup_free_space_inode(root, path, 0);
-	if (IS_ERR(inode))
-		return inode;
-
-	spin_lock(&root->cache_lock);
-	if (!btrfs_fs_closing(root->fs_info))
-		root->cache_inode = igrab(inode);
-	spin_unlock(&root->cache_lock);
-
-	return inode;
-}
-
-int create_free_ino_inode(struct btrfs_root *root,
-			  struct btrfs_trans_handle *trans,
-			  struct btrfs_path *path)
-{
-	return __create_free_space_inode(root, trans, path,
-					 BTRFS_FREE_INO_OBJECTID, 0);
-}
-
-int load_free_ino_cache(struct btrfs_fs_info *fs_info, struct btrfs_root *root)
-{
-	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
-	struct btrfs_path *path;
-	struct inode *inode;
-	int ret = 0;
-	u64 root_gen = btrfs_root_generation(&root->root_item);
-
-	if (!btrfs_test_opt(root, INODE_MAP_CACHE))
-		return 0;
-
-	/*
-	 * If we're unmounting then just return, since this does a search on the
-	 * normal root and not the commit root and we could deadlock.
-	 */
-	if (btrfs_fs_closing(fs_info))
-		return 0;
-
-	path = btrfs_alloc_path();
-	if (!path)
-		return 0;
-
-	inode = lookup_free_ino_inode(root, path);
-	if (IS_ERR(inode))
-		goto out;
-
-	if (root_gen != BTRFS_I(inode)->generation)
-		goto out_put;
-
-	ret = __load_free_space_cache(root, inode, ctl, path, 0);
-
-	if (ret < 0)
-		printk(KERN_ERR "btrfs: failed to load free ino cache for "
-		       "root %llu\n", root->root_key.objectid);
-out_put:
-	iput(inode);
-out:
-	btrfs_free_path(path);
-	return ret;
-}
-
-int btrfs_write_out_ino_cache(struct btrfs_root *root,
-			      struct btrfs_trans_handle *trans,
-			      struct btrfs_path *path)
-{
-	struct btrfs_free_space_ctl *ctl = root->free_ino_ctl;
-	struct inode *inode;
-	int ret;
-
-	if (!btrfs_test_opt(root, INODE_MAP_CACHE))
-		return 0;
-
-	inode = lookup_free_ino_inode(root, path);
-	if (IS_ERR(inode))
-		return 0;
-
-	ret = __btrfs_write_out_cache(root, inode, ctl, NULL, trans, path, 0);
-	if (ret) {
-		btrfs_delalloc_release_metadata(inode, inode->i_size);
-#ifdef DEBUG
-		printk(KERN_ERR "btrfs: failed to write free ino cache "
-		       "for root %llu\n", root->root_key.objectid);
-#endif
-	}
-
-	iput(inode);
-	return ret;
-}

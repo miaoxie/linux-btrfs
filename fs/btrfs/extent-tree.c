@@ -535,7 +535,7 @@ static int cache_block_group(struct btrfs_block_group_cache *cache,
 	spin_unlock(&cache->lock);
 
 	if (fs_info->mount_opt & BTRFS_MOUNT_SPACE_CACHE) {
-		ret = load_free_space_cache(fs_info, cache);
+		ret = btrfs_load_free_space_cache(fs_info, cache);
 
 		spin_lock(&cache->lock);
 		if (ret == 1) {
@@ -2995,7 +2995,7 @@ static int cache_save_setup(struct btrfs_block_group_cache *block_group,
 	}
 
 again:
-	inode = lookup_free_space_inode(root, block_group, path);
+	inode = btrfs_lookup_free_space_inode(root, block_group, path);
 	if (IS_ERR(inode) && PTR_ERR(inode) != -ENOENT) {
 		ret = PTR_ERR(inode);
 		btrfs_release_path(path);
@@ -3009,7 +3009,8 @@ again:
 		if (block_group->ro)
 			goto out_free;
 
-		ret = create_free_space_inode(root, trans, block_group, path);
+		ret = btrfs_create_free_space_inode(root, trans, block_group,
+						    path);
 		if (ret)
 			goto out_free;
 		goto again;
@@ -3032,8 +3033,7 @@ again:
 	WARN_ON(ret);
 
 	if (i_size_read(inode) > 0) {
-		ret = btrfs_truncate_free_space_cache(root, trans, path,
-						      inode);
+		ret = btrfs_truncate_cache(root, trans, path, inode);
 		if (ret)
 			goto out_put;
 	}
@@ -3194,8 +3194,8 @@ again:
 			continue;
 		}
 
-		err = btrfs_write_out_cache(root, trans, cache, path);
-
+		err = btrfs_write_out_free_space_cache(root, trans, cache,
+						       path);
 		/*
 		 * If we didn't have an error then the cache state is still
 		 * NEED_WRITE, so we can set it to WRITTEN.
@@ -8201,7 +8201,7 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 		goto out;
 	}
 
-	inode = lookup_free_space_inode(tree_root, block_group, path);
+	inode = btrfs_lookup_free_space_inode(tree_root, block_group, path);
 	if (!IS_ERR(inode)) {
 		ret = btrfs_orphan_add(trans, inode);
 		if (ret) {
