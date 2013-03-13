@@ -29,14 +29,18 @@
 #include "inode-map.h"
 #include "math.h"
 
-#define BITS_PER_BITMAP			(PAGE_CACHE_SIZE << 3)
-#define BITS_PER_BITMAP_SHIFT		(PAGE_CACHE_SHIFT + 3)
+#define BITMAP_SIZE			(BTRFS_SC_BLOCK_SIZE)
+#define BITMAP_SIZE_SHIFT		(BTRFS_SC_BLOCK_SIZE_SHIFT)
+#define BITS_PER_BITMAP			(BITMAP_SIZE << 3)
+#define BITS_PER_BITMAP_SHIFT		(BITMAP_SIZE_SHIFT + 3)
 #define BYTES_PER_BITMAP(ctl)		(BITS_PER_BITMAP << ctl->unit_shift)
 #define BYTES_PER_BITMAP_SHIFT(ctl)	(BITS_PER_BITMAP_SHIFT + \
 					 ctl->unit_shift)
+#define BLOCKS_PER_PAGE			(1 << (PAGE_CACHE_SHIFT -	\
+					       BTRFS_SC_BLOCK_SIZE_SHIFT))
 #define MAX_CACHE_BYTES_PER_GIG(ctl)	(1 << (30 - ctl->unit_shift -	\
 					       BITS_PER_BITMAP_SHIFT +	\
-					       PAGE_CACHE_SHIFT))
+					       BTRFS_SC_BLOCK_SIZE_SHIFT))
 
 static int link_free_space(struct btrfs_free_space_ctl *ctl,
 			   struct btrfs_free_space *info);
@@ -272,13 +276,17 @@ static int readahead_cache(struct inode *inode)
 }
 
 struct io_ctl {
-	void *cur, *orig;
+	void *cur;
+	void *orig;
+	__le32 *crcs;
 	struct page *page;
 	struct page **pages;
 	struct btrfs_root *root;
 	int size;
-	int index;
+	int page_index;
 	int num_pages;
+	int block_index;
+	int num_blocks;
 	unsigned check_crcs:1;
 };
 
@@ -288,6 +296,8 @@ static int io_ctl_init(struct io_ctl *io_ctl, struct inode *inode,
 	memset(io_ctl, 0, sizeof(struct io_ctl));
 	io_ctl->num_pages = DIV_ROUND_UP_SHIFT(i_size_read(inode),
 					       PAGE_CACHE_SHIFT);
+	io_ctl->num_blocks = io_ctl->num_pages <<
+			     (PAGE_CACHE_SHIFT - BTRFS_SC_BLOCK_SIZE_SHIFT);
 	io_ctl->pages = kzalloc(sizeof(struct page *) * io_ctl->num_pages,
 				GFP_NOFS);
 	if (!io_ctl->pages)
@@ -312,15 +322,13 @@ static void io_ctl_unmap_page(struct io_ctl *io_ctl)
 	}
 }
 
-static void io_ctl_map_page(struct io_ctl *io_ctl, int clear)
+static void io_ctl_map_page(struct io_ctl *io_ctl)
 {
-	BUG_ON(io_ctl->index >= io_ctl->num_pages);
-	io_ctl->page = io_ctl->pages[io_ctl->index++];
+	BUG_ON(io_ctl->page_index >= io_ctl->num_pages);
+	io_ctl->page = io_ctl->pages[io_ctl->page_index++];
 	io_ctl->cur = kmap(io_ctl->page);
 	io_ctl->orig = io_ctl->cur;
-	io_ctl->size = PAGE_CACHE_SIZE;
-	if (clear)
-		memset(io_ctl->cur, 0, PAGE_CACHE_SIZE);
+	io_ctl->size = BTRFS_SC_BLOCK_SIZE;
 }
 
 static void io_ctl_drop_pages(struct io_ctl *io_ctl)
@@ -328,6 +336,9 @@ static void io_ctl_drop_pages(struct io_ctl *io_ctl)
 	int i;
 
 	io_ctl_unmap_page(io_ctl);
+
+	if (io_ctl->crcs)
+		kunmap(io_ctl->pages[0]);
 
 	for (i = 0; i < io_ctl->num_pages; i++) {
 		if (io_ctl->pages[i]) {
@@ -369,177 +380,185 @@ static int io_ctl_prepare_pages(struct io_ctl *io_ctl, struct inode *inode,
 		set_page_extent_mapped(io_ctl->pages[i]);
 	}
 
+	if (io_ctl->check_crcs)
+		io_ctl->crcs = kmap(io_ctl->pages[0]);
 	return 0;
 }
 
 static void io_ctl_set_crc(struct io_ctl *io_ctl, int index)
 {
-	u32 *tmp;
 	u32 crc = ~(u32)0;
 	unsigned offset = 0;
 
-	if (!io_ctl->check_crcs) {
-		io_ctl_unmap_page(io_ctl);
+	if (!io_ctl->check_crcs)
 		return;
-	}
 
 	if (index == 0) {
-		offset = sizeof(u32) * io_ctl->num_pages;
+		offset = sizeof(u32) * io_ctl->num_blocks;
 		/*
 		 * The current page is full of CRCs, we have skipped it
 		 * in the caller.
 		 */
-		BUG_ON(unlikely(PAGE_CACHE_SIZE - offset < sizeof(u64)));
+		BUG_ON(unlikely(BTRFS_SC_BLOCK_SIZE - offset < sizeof(u64)));
 	}
 
 	crc = btrfs_csum_data(io_ctl->root, io_ctl->orig + offset, crc,
-			      PAGE_CACHE_SIZE - offset);
+			      BTRFS_SC_BLOCK_SIZE - offset);
 	btrfs_csum_final(crc, (char *)&crc);
-	io_ctl_unmap_page(io_ctl);
-	tmp = kmap(io_ctl->pages[0]);
-	tmp += index;
-	*tmp = crc;
-	kunmap(io_ctl->pages[0]);
+	io_ctl->crcs[index] = crc;
 }
 
 static int io_ctl_check_crc(struct io_ctl *io_ctl, int index)
 {
-	u32 *tmp, val;
+	u32 val;
 	u32 crc = ~(u32)0;
 	unsigned offset = 0;
 
-	if (!io_ctl->check_crcs) {
-		io_ctl_map_page(io_ctl, 0);
+	if (!io_ctl->check_crcs)
 		return 0;
-	}
 
 	if (index == 0) {
-		offset = sizeof(u32) * io_ctl->num_pages;
+		offset = sizeof(u32) * io_ctl->num_blocks;
 		/*
 		 * The current page is full of CRCs, we have skipped it
 		 * in the caller.
 		 */
-		BUG_ON(unlikely(PAGE_CACHE_SIZE - offset < sizeof(u64)));
+		BUG_ON(unlikely(BTRFS_SC_BLOCK_SIZE - offset < sizeof(u64)));
 	}
 
-	tmp = kmap(io_ctl->pages[0]);
-	tmp += index;
-	val = *tmp;
-	kunmap(io_ctl->pages[0]);
-
-	io_ctl_map_page(io_ctl, 0);
+	val = io_ctl->crcs[index];
 	crc = btrfs_csum_data(io_ctl->root, io_ctl->orig + offset, crc,
-			      PAGE_CACHE_SIZE - offset);
+			      BTRFS_SC_BLOCK_SIZE - offset);
 	btrfs_csum_final(crc, (char *)&crc);
 	if (val != crc) {
 		printk_ratelimited(KERN_ERR "btrfs: csum mismatch on free "
 				   "space cache\n");
-		io_ctl_unmap_page(io_ctl);
 		return -EIO;
 	}
 
 	return 0;
 }
 
+static int io_ctl_next_block(struct io_ctl *io_ctl, int clear)
+{
+	if (io_ctl->block_index >= io_ctl->num_blocks - 1)
+		return -ENOSPC;
+
+	if (!io_ctl->cur) {
+		io_ctl_map_page(io_ctl);
+		goto out;
+	}
+
+	io_ctl->block_index++;
+	if (io_ctl->block_index % BLOCKS_PER_PAGE == 0) {
+		io_ctl_unmap_page(io_ctl);
+		io_ctl_map_page(io_ctl);
+		goto out;
+	}
+
+	io_ctl->orig += BTRFS_SC_BLOCK_SIZE;
+	io_ctl->cur = io_ctl->orig;
+	io_ctl->size = BTRFS_SC_BLOCK_SIZE;
+out:
+	if (clear)
+		memset(io_ctl->cur, 0, BTRFS_SC_BLOCK_SIZE);
+	return 0;
+}
+
 static void io_ctl_set_generation(struct io_ctl *io_ctl, u64 generation)
 {
+	int ret;
 	__le64 *val;
 
-	io_ctl_map_page(io_ctl, 1);
-
+	ret = io_ctl_next_block(io_ctl, 1);
+	BUG_ON(ret);	/* Logic error */
 	/*
 	 * Skip the csum areas.  If we don't check crcs then we just have a
-	 * 64bit chunk at the front of the first page.
+	 * 64bit chunk at the front of the first block.
 	 */
 	if (io_ctl->check_crcs) {
-		io_ctl->cur += (sizeof(u32) * io_ctl->num_pages);
-		io_ctl->size -= sizeof(u64) + (sizeof(u32) * io_ctl->num_pages);
+		io_ctl->cur += (sizeof(u32) * io_ctl->num_blocks);
+		io_ctl->size -= sizeof(u64) +
+				(sizeof(u32) * io_ctl->num_blocks);
 	} else {
 		io_ctl->cur += sizeof(u64);
 		io_ctl->size -= sizeof(u64) * 2;
 	}
-	/* The current page is full of CRCs */
+	/* The current block is full of CRCs */
 	if (unlikely(io_ctl->size < 0)) {
 		/*
 		 * needn't calc CRC because it is a page in which
 		 * there are only CRCs.
 		 */
-		io_ctl_unmap_page(io_ctl);
-		io_ctl_map_page(io_ctl, 1);
+		ret = io_ctl_next_block(io_ctl, 1);
+		BUG_ON(ret);	/* Logic error */
 		io_ctl->size -= sizeof(u64);
 	}
 
 	val = io_ctl->cur;
 	*val = cpu_to_le64(generation);
 	io_ctl->cur += sizeof(u64);
-
-	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
-		return;
-
-	io_ctl_set_crc(io_ctl, io_ctl->index - 1);
-
-	/* map the next page */
-	io_ctl_map_page(io_ctl, 1);
 }
 
 static int io_ctl_check_generation(struct io_ctl *io_ctl, u64 generation)
 {
 	__le64 *gen;
-	int offset;
 	int ret;
 
+	ret = io_ctl_next_block(io_ctl, 0);
+	BUG_ON(ret);
 	/*
-	 * Skip the crc area.  If we don't check crcs then we just have a 64bit
-	 * chunk at the front of the first page.
+	 * Skip the csum areas.  If we don't check crcs then we just have a
+	 * 64bit chunk at the front of the first block.
 	 */
-	if (io_ctl->check_crcs)
-		offset = sizeof(u32) * io_ctl->num_pages;
-	else
-		offset = sizeof(u64);
-
-	/* The current page is full of CRCs */
-	if (unlikely(offset > PAGE_CACHE_SIZE - sizeof(64))) {
+	if (io_ctl->check_crcs) {
+		io_ctl->cur += (sizeof(u32) * io_ctl->num_blocks);
+		io_ctl->size -= sizeof(u64) +
+				(sizeof(u32) * io_ctl->num_blocks);
+	} else {
+		io_ctl->cur += sizeof(u64);
+		io_ctl->size -= sizeof(u64) * 2;
+	}
+	/* The current block is full of CRCs */
+	if (unlikely(io_ctl->size < 0)) {
 		/*
-		 * needn't calc CRC of the first page because there are
+		 * skip checking CRC of the first block because there are
 		 * only CRCs on it.
 		 */
-		io_ctl->index++;
-		ret = io_ctl_check_crc(io_ctl, 1);
-		if (ret)
-			return ret;
+		ret = io_ctl_next_block(io_ctl, 0);
+		BUG_ON(ret);
 		io_ctl->size -= sizeof(u64);
-	} else {
-		ret = io_ctl_check_crc(io_ctl, 0);
-		if (ret)
-			return ret;
-		io_ctl->size -= offset + sizeof(u64);
-		io_ctl->cur += offset;
 	}
+
+	ret = io_ctl_check_crc(io_ctl, io_ctl->block_index);
+	if (ret)
+		return ret;
 
 	gen = io_ctl->cur;
 	if (le64_to_cpu(*gen) != generation) {
 		printk_ratelimited(KERN_ERR "btrfs: space cache generation "
 				   "(%Lu) does not match inode (%Lu)\n", *gen,
 				   generation);
-		io_ctl_unmap_page(io_ctl);
 		return -EIO;
 	}
 	io_ctl->cur += sizeof(u64);
 
-	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
-		return 0;
-
-	io_ctl_unmap_page(io_ctl);
 	return 0;
 }
 
 static int io_ctl_add_entry(struct io_ctl *io_ctl, u64 offset, u64 bytes,
 			    void *bitmap)
 {
+	int ret;
 	struct btrfs_free_space_entry *entry;
 
-	if (!io_ctl->cur)
-		return -ENOSPC;
+	if (unlikely(io_ctl->size < sizeof(struct btrfs_free_space_entry))) {
+		io_ctl_set_crc(io_ctl, io_ctl->block_index);
+		/* get next block */
+		ret = io_ctl_next_block(io_ctl, 1);
+		if (ret)
+			return ret;
+	}
 
 	entry = io_ctl->cur;
 	entry->offset = cpu_to_le64(offset);
@@ -548,58 +567,50 @@ static int io_ctl_add_entry(struct io_ctl *io_ctl, u64 offset, u64 bytes,
 		BTRFS_FREE_SPACE_EXTENT;
 	io_ctl->cur += sizeof(struct btrfs_free_space_entry);
 	io_ctl->size -= sizeof(struct btrfs_free_space_entry);
-
-	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
-		return 0;
-
-	io_ctl_set_crc(io_ctl, io_ctl->index - 1);
-
-	/* No more pages to map */
-	if (io_ctl->index >= io_ctl->num_pages)
-		return 0;
-
-	/* map the next page */
-	io_ctl_map_page(io_ctl, 1);
 	return 0;
 }
 
-static int io_ctl_add_bitmap(struct io_ctl *io_ctl, void *bitmap)
+static int io_ctl_add_bitmap(struct io_ctl *io_ctl, void *bitmap,
+			     int bitmap_size)
 {
-	if (!io_ctl->cur)
-		return -ENOSPC;
+	void *tmp;
+	int need_clear = (bitmap_size < BTRFS_SC_BLOCK_SIZE);
+	int bs = (bitmap_size < BTRFS_SC_BLOCK_SIZE ? bitmap_size :
+						      BTRFS_SC_BLOCK_SIZE);
+	int offset;
+	int ret;
 
-	/*
-	 * If we aren't at the start of the current page, unmap this one and
-	 * map the next one if there is any left.
-	 */
-	if (io_ctl->cur != io_ctl->orig) {
-		io_ctl_set_crc(io_ctl, io_ctl->index - 1);
-		if (io_ctl->index >= io_ctl->num_pages)
-			return -ENOSPC;
-		io_ctl_map_page(io_ctl, 0);
+	BUG_ON((bitmap_size % bs) || (BTRFS_SC_BLOCK_SIZE % bs));
+
+	if (unlikely(!IS_ALIGNED((unsigned long)io_ctl->cur, bs))) {
+		tmp = io_ctl->cur;
+		io_ctl->cur = PTR_ALIGN(tmp, bs);
+		io_ctl->size -= io_ctl->cur - tmp;
 	}
 
-	memcpy(io_ctl->cur, bitmap, PAGE_CACHE_SIZE);
-	io_ctl_set_crc(io_ctl, io_ctl->index - 1);
-	if (io_ctl->index < io_ctl->num_pages)
-		io_ctl_map_page(io_ctl, 0);
+	for (offset = 0; offset < bitmap_size; offset += bs) {
+		if (io_ctl->size < bs) {
+			io_ctl_set_crc(io_ctl, io_ctl->block_index);
+			/* get next block */
+			ret = io_ctl_next_block(io_ctl, need_clear);
+			if (ret)
+				return ret;
+		}
+
+		memcpy(io_ctl->cur, bitmap + offset, bs);
+		io_ctl->size -= bs;
+		io_ctl->cur += bs;
+	}
 	return 0;
 }
 
 static void io_ctl_zero_remaining_pages(struct io_ctl *io_ctl)
 {
-	/*
-	 * If we're not on the boundary we know we've modified the page and we
-	 * need to crc the page.
-	 */
-	if (io_ctl->cur != io_ctl->orig)
-		io_ctl_set_crc(io_ctl, io_ctl->index - 1);
-	else
-		io_ctl_unmap_page(io_ctl);
+	io_ctl_set_crc(io_ctl, io_ctl->block_index);
 
-	while (io_ctl->index < io_ctl->num_pages) {
-		io_ctl_map_page(io_ctl, 1);
-		io_ctl_set_crc(io_ctl, io_ctl->index - 1);
+	while (io_ctl->block_index < io_ctl->num_blocks - 1) {
+		io_ctl_next_block(io_ctl, 1);
+		io_ctl_set_crc(io_ctl, io_ctl->block_index);
 	}
 }
 
@@ -609,8 +620,11 @@ static int io_ctl_read_entry(struct io_ctl *io_ctl,
 	struct btrfs_free_space_entry *e;
 	int ret;
 
-	if (!io_ctl->cur) {
-		ret = io_ctl_check_crc(io_ctl, io_ctl->index);
+	if (unlikely(io_ctl->size < sizeof(struct btrfs_free_space_entry))) {
+		ret = io_ctl_next_block(io_ctl, 0);
+		if (ret)
+			return ret;
+		ret = io_ctl_check_crc(io_ctl, io_ctl->block_index);
 		if (ret)
 			return ret;
 	}
@@ -621,27 +635,40 @@ static int io_ctl_read_entry(struct io_ctl *io_ctl,
 	*type = e->type;
 	io_ctl->cur += sizeof(struct btrfs_free_space_entry);
 	io_ctl->size -= sizeof(struct btrfs_free_space_entry);
-
-	if (io_ctl->size >= sizeof(struct btrfs_free_space_entry))
-		return 0;
-
-	io_ctl_unmap_page(io_ctl);
-
 	return 0;
 }
 
 static int io_ctl_read_bitmap(struct io_ctl *io_ctl,
-			      struct btrfs_free_space *entry)
+			      struct btrfs_free_space *entry, int bitmap_size)
 {
+	void *tmp;
+	int bs = (bitmap_size < BTRFS_SC_BLOCK_SIZE ? bitmap_size :
+						      BTRFS_SC_BLOCK_SIZE);
+	int offset;
 	int ret;
 
-	ret = io_ctl_check_crc(io_ctl, io_ctl->index);
-	if (ret)
-		return ret;
+	BUG_ON((bitmap_size % bs) || (BTRFS_SC_BLOCK_SIZE % bs));
 
-	memcpy(entry->bitmap, io_ctl->cur, PAGE_CACHE_SIZE);
-	io_ctl_unmap_page(io_ctl);
+	if (unlikely(!IS_ALIGNED((unsigned long)io_ctl->cur, bs))) {
+		tmp = io_ctl->cur;
+		io_ctl->cur = PTR_ALIGN(tmp, bs);
+		io_ctl->size -= io_ctl->cur - tmp;
+	}
 
+	for (offset = 0; offset < bitmap_size; offset += bs) {
+		if (io_ctl->size < bs) {
+			ret = io_ctl_next_block(io_ctl, 0);
+			if (ret)
+				return ret;
+			ret = io_ctl_check_crc(io_ctl, io_ctl->block_index);
+			if (ret)
+				return ret;
+		}
+
+		memcpy(entry->bitmap + offset, io_ctl->cur, bs);
+		io_ctl->size -= bs;
+		io_ctl->cur += bs;
+	}
 	return 0;
 }
 
@@ -792,7 +819,7 @@ int __load_free_space_cache(struct btrfs_root *root, struct inode *inode,
 		} else {
 			BUG_ON(!num_bitmaps);
 			num_bitmaps--;
-			e->bitmap = kzalloc(PAGE_CACHE_SIZE, GFP_NOFS);
+			e->bitmap = kzalloc(BITMAP_SIZE, GFP_NOFS);
 			if (!e->bitmap) {
 				kmem_cache_free(
 					btrfs_free_space_cachep, e);
@@ -821,7 +848,7 @@ int __load_free_space_cache(struct btrfs_root *root, struct inode *inode,
 	 */
 	list_for_each_entry_safe(e, n, &bitmaps, list) {
 		list_del_init(&e->list);
-		ret = io_ctl_read_bitmap(&io_ctl, e);
+		ret = io_ctl_read_bitmap(&io_ctl, e, BITMAP_SIZE);
 		if (ret)
 			goto free_cache;
 	}
@@ -1083,7 +1110,7 @@ int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
 
 	/* Make sure we can fit our crcs into the first page */
 	if (io_ctl.check_crcs &&
-	    (io_ctl.num_pages * sizeof(u32)) >= PAGE_CACHE_SIZE) {
+	    (io_ctl.num_blocks * sizeof(u32)) >= BTRFS_SC_BLOCK_SIZE) {
 		WARN_ON(1);
 		goto out_nospc;
 	}
@@ -1155,7 +1182,7 @@ int __btrfs_write_out_cache(struct btrfs_root *root, struct inode *inode,
 		struct btrfs_free_space *entry =
 			list_entry(pos, struct btrfs_free_space, list);
 
-		ret = io_ctl_add_bitmap(&io_ctl, entry->bitmap);
+		ret = io_ctl_add_bitmap(&io_ctl, entry->bitmap, BITMAP_SIZE);
 		if (ret)
 			goto out_nospc;
 		list_del_init(&entry->list);
@@ -1478,7 +1505,7 @@ static void recalculate_thresholds(struct btrfs_free_space_ctl *ctl)
 	 * sure we don't go over our overall goal of MAX_CACHE_BYTES_PER_GIG as
 	 * we add more bitmaps.
 	 */
-	bitmap_bytes = (ctl->total_bitmaps + 1) * PAGE_CACHE_SIZE;
+	bitmap_bytes = (ctl->total_bitmaps + 1) * BITMAP_SIZE;
 
 	if (bitmap_bytes >= max_bytes) {
 		ctl->extents_thresh = 0;
@@ -1882,7 +1909,7 @@ new_bitmap:
 		}
 
 		/* allocate the bitmap */
-		info->bitmap = kzalloc(PAGE_CACHE_SIZE, GFP_NOFS);
+		info->bitmap = kzalloc(BITMAP_SIZE, GFP_NOFS);
 		spin_lock(&ctl->tree_lock);
 		if (!info->bitmap) {
 			ret = -ENOMEM;

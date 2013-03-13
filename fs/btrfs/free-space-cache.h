@@ -19,6 +19,9 @@
 #ifndef __BTRFS_FREE_SPACE_CACHE
 #define __BTRFS_FREE_SPACE_CACHE
 
+#define BTRFS_SC_BLOCK_SIZE		4096
+#define BTRFS_SC_BLOCK_SIZE_SHIFT	12
+
 struct btrfs_free_space {
 	struct rb_node node;
 	u64 offset;
