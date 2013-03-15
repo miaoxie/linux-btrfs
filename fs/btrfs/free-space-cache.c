@@ -1768,8 +1768,7 @@ static u64 add_bytes_to_bitmap(struct btrfs_free_space_ctl *ctl,
 
 }
 
-static bool use_bitmap(struct btrfs_free_space_ctl *ctl,
-		      struct btrfs_free_space *info)
+static bool use_bitmap(struct btrfs_free_space_ctl *ctl, u64 bytes)
 {
 	struct btrfs_block_group_cache *block_group = ctl->private;
 
@@ -1785,7 +1784,7 @@ static bool use_bitmap(struct btrfs_free_space_ctl *ctl,
 		 * of cache left then go ahead an dadd them, no sense in adding
 		 * the overhead of a bitmap if we don't have to.
 		 */
-		if (info->bytes <= block_group->sectorsize * 4) {
+		if (bytes <= block_group->sectorsize * 4) {
 			if (ctl->free_extents * 2 <= ctl->extents_thresh)
 				return false;
 		} else {
@@ -1813,18 +1812,17 @@ static struct btrfs_free_space_op free_space_op = {
 };
 
 static int insert_into_bitmap(struct btrfs_free_space_ctl *ctl,
-			      struct btrfs_free_space *info)
+			      u64 offset, u64 bytes)
 {
+	struct btrfs_free_space *info = NULL;
 	struct btrfs_free_space *bitmap_info;
 	struct btrfs_block_group_cache *block_group = NULL;
 	int added = 0;
-	u64 bytes, offset, bytes_added;
+	u64 bytes_added;
 	int ret;
 
-	bytes = info->bytes;
-	offset = info->offset;
 
-	if (!ctl->op->use_bitmap(ctl, info))
+	if (!ctl->op->use_bitmap(ctl, bytes))
 		return 0;
 
 	if (ctl->op == &free_space_op)
@@ -1889,7 +1887,7 @@ no_cluster_bitmap:
 		goto again;
 
 new_bitmap:
-	if (info && info->bitmap) {
+	if (info) {
 		add_new_bitmap(ctl, info, offset);
 		added = 1;
 		info = NULL;
@@ -1897,15 +1895,11 @@ new_bitmap:
 	} else {
 		spin_unlock(&ctl->tree_lock);
 
-		/* no pre-allocated info, allocate a new one */
+		info = kmem_cache_zalloc(btrfs_free_space_cachep, GFP_NOFS);
 		if (!info) {
-			info = kmem_cache_zalloc(btrfs_free_space_cachep,
-						 GFP_NOFS);
-			if (!info) {
-				spin_lock(&ctl->tree_lock);
-				ret = -ENOMEM;
-				goto out;
-			}
+			spin_lock(&ctl->tree_lock);
+			ret = -ENOMEM;
+			goto out;
 		}
 
 		/* allocate the bitmap */
@@ -1984,36 +1978,39 @@ int __btrfs_add_free_space(struct btrfs_free_space_ctl *ctl,
 	struct btrfs_free_space *info;
 	int ret = 0;
 
-	info = kmem_cache_zalloc(btrfs_free_space_cachep, GFP_NOFS);
-	if (!info)
-		return -ENOMEM;
 
 	spin_lock(&ctl->tree_lock);
 	if (try_merge_free_space(ctl, offset, bytes, true)) {
-		kmem_cache_free(btrfs_free_space_cachep, info);
+		spin_unlock(&ctl->tree_lock);
 		goto out;
 	}
 
-	info->offset = offset;
-	info->bytes = bytes;
 	/*
 	 * There was no extent directly to the left or right of this new
 	 * extent then we know we're going to have to allocate a new extent, so
 	 * before we do that see if we need to drop this into a bitmap
 	 */
-	ret = insert_into_bitmap(ctl, info);
+	ret = insert_into_bitmap(ctl, offset, bytes);
+	spin_unlock(&ctl->tree_lock);
 	if (ret < 0) {
 		goto out;
 	} else if (ret) {
 		ret = 0;
 		goto out;
 	}
+
+	info = kmem_cache_zalloc(btrfs_free_space_cachep, GFP_NOFS);
+	if (!info)
+		return -ENOMEM;
+	info->offset = offset;
+	info->bytes = bytes;
+
+	spin_lock(&ctl->tree_lock);
 	ret = link_free_space(ctl, info);
 	if (ret)
 		kmem_cache_free(btrfs_free_space_cachep, info);
-out:
 	spin_unlock(&ctl->tree_lock);
-
+out:
 	if (ret) {
 		printk(KERN_CRIT "btrfs: unable to add free space :%d\n", ret);
 		BUG_ON(ret == -EEXIST);

@@ -61,8 +61,7 @@ struct btrfs_free_space_iter {
 
 struct btrfs_free_space_op {
 	void (*recalc_thresholds)(struct btrfs_free_space_ctl *ctl);
-	bool (*use_bitmap)(struct btrfs_free_space_ctl *ctl,
-			   struct btrfs_free_space *info);
+	bool (*use_bitmap)(struct btrfs_free_space_ctl *ctl, u64 bytes);
 };
 
 int btrfs_create_cache_inode(struct btrfs_root *root,

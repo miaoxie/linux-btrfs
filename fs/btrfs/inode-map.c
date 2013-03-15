@@ -415,11 +415,10 @@ static void recalculate_thresholds(struct btrfs_free_space_ctl *ctl)
  * We don't fall back to bitmap, if we are below the extents threshold
  * or this chunk of inode numbers is a big one.
  */
-static bool use_bitmap(struct btrfs_free_space_ctl *ctl,
-		       struct btrfs_free_space *info)
+static bool use_bitmap(struct btrfs_free_space_ctl *ctl, u64 bytes)
 {
 	if (ctl->free_extents < ctl->extents_thresh ||
-	    info->bytes > INODES_PER_BITMAP / 10)
+	    bytes > INODES_PER_BITMAP / 10)
 		return false;
 
 	return true;
@@ -434,8 +433,7 @@ static void pinned_recalc_thresholds(struct btrfs_free_space_ctl *ctl)
 {
 }
 
-static bool pinned_use_bitmap(struct btrfs_free_space_ctl *ctl,
-			      struct btrfs_free_space *info)
+static bool pinned_use_bitmap(struct btrfs_free_space_ctl *ctl, u64 bytes)
 {
 	/*
 	 * We always use extents for two reasons:
