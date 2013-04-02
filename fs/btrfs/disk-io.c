@@ -1495,6 +1495,13 @@ struct btrfs_root *btrfs_read_fs_root_no_radix(struct btrfs_root *tree_root,
 		kfree(root);
 		return ERR_PTR(-ENOMEM);
 	}
+
+	if (!btrfs_buffer_uptodate(root->node, generation, 0)) {
+		free_extent_buffer(root->node);
+		root->node = NULL;
+		kfree(root);
+		return ERR_PTR(-EIO);
+	}
 	root->commit_root = btrfs_root_node(root);
 out:
 	if (location->objectid != BTRFS_TREE_LOG_OBJECTID) {
