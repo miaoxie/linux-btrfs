@@ -1491,8 +1491,11 @@ struct btrfs_root *btrfs_read_fs_root_no_radix(struct btrfs_root *tree_root,
 	blocksize = btrfs_level_size(root, btrfs_root_level(&root->root_item));
 	root->node = read_tree_block(root, btrfs_root_bytenr(&root->root_item),
 				     blocksize, generation);
+	if (!root->node) {
+		kfree(root);
+		return ERR_PTR(-ENOMEM);
+	}
 	root->commit_root = btrfs_root_node(root);
-	BUG_ON(!root->node); /* -ENOMEM */
 out:
 	if (location->objectid != BTRFS_TREE_LOG_OBJECTID) {
 		root->ref_cows = 1;
