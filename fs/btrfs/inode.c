@@ -7986,9 +7986,9 @@ void btrfs_destroy_inode(struct inode *inode)
 	 */
 	smp_mb();
 	if (!list_empty(&BTRFS_I(inode)->ordered_operations)) {
-		spin_lock(&fs_info->ordered_extent_lock);
+		spin_lock(&fs_info->ordered_root_lock);
 		list_del_init(&BTRFS_I(inode)->ordered_operations);
-		spin_unlock(&fs_info->ordered_extent_lock);
+		spin_unlock(&fs_info->ordered_root_lock);
 	}
 
 	btrfs_drop_extent_cache(inode, 0, (u64)-1, 0);
