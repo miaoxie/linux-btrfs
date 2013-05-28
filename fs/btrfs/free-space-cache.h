@@ -34,15 +34,18 @@ struct btrfs_free_space_ctl {
 	spinlock_t tree_lock;
 	struct rb_root extent_root;
 	struct rb_root bitmap_root;
+	struct btrfs_free_space_op *op;
+	void *private;
+	u64 start;
 	u64 free_space;
 	int extents_thresh;
 	int free_extents;
 	int total_bitmaps;
-	int unit;
-	int unit_shift;
-	u64 start;
-	struct btrfs_free_space_op *op;
-	void *private;
+	unsigned short unit;
+	unsigned short unit_shift;
+	int bitmap_size;
+	int bits_per_bitmap;
+	int bits_per_bitmap_shift;
 };
 
 enum btrfs_free_space_root_types {
@@ -62,6 +65,24 @@ struct btrfs_free_space_iter {
 struct btrfs_free_space_op {
 	void (*recalc_thresholds)(struct btrfs_free_space_ctl *ctl);
 	bool (*use_bitmap)(struct btrfs_free_space_ctl *ctl, u64 bytes);
+	u64 (*calc_cache_size)(struct btrfs_free_space_ctl *ctl);
+	void *(*alloc_bitmap)(void);
+	void (*free_bitmap)(struct btrfs_free_space *info);
+	int (*search_bitmap)(struct btrfs_free_space_ctl *ctl,
+			     struct btrfs_free_space *info,
+			     u64 *start, u64 *bytes);
+	int (*clear_bitmap)(struct btrfs_free_space_ctl *ctl,
+			    struct btrfs_free_space *info,
+			    u64 start, u64 bytes);
+	int (*set_bitmap)(struct btrfs_free_space_ctl *ctl,
+			    struct btrfs_free_space *info,
+			    u64 start, u64 bytes);
+};
+
+struct btrfs_free_space_type {
+	char *name;
+	struct btrfs_free_space_ctl *(*alloc_cache_ctl)(void);
+	void (*free_cache_ctl)(struct btrfs_free_space_ctl *ctl);
 };
 
 int btrfs_create_cache_inode(struct btrfs_root *root,

@@ -460,6 +460,9 @@ void btrfs_init_free_ino_ctl(struct btrfs_root *root)
 	ctl->unit_shift = 0;
 	ctl->start = 0;
 	ctl->private = NULL;
+	ctl->bitmap_size = BTRFS_SC_BLOCK_SIZE;
+	ctl->bits_per_bitmap = BTRFS_SC_BLOCK_SIZE << 3;
+	ctl->bits_per_bitmap_shift = BTRFS_SC_BLOCK_SIZE_SHIFT + 3;
 	ctl->op = &free_ino_op;
 
 	/*
@@ -472,6 +475,9 @@ void btrfs_init_free_ino_ctl(struct btrfs_root *root)
 	spin_lock_init(&pinned->tree_lock);
 	pinned->unit = 1;
 	pinned->unit_shift = 0;
+	pinned->bitmap_size = BTRFS_SC_BLOCK_SIZE;
+	pinned->bits_per_bitmap = BTRFS_SC_BLOCK_SIZE << 3;
+	pinned->bits_per_bitmap_shift = BTRFS_SC_BLOCK_SIZE_SHIFT + 3;
 	pinned->start = 0;
 	pinned->private = NULL;
 	pinned->extents_thresh = 0;
