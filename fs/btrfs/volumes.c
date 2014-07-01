@@ -522,7 +522,9 @@ static noinline int device_list_add(const char *path,
 		fs_devices->latest_devid = devid;
 		fs_devices->latest_trans = found_transid;
 	}
-	*fs_devices_ret = fs_devices;
+
+	if (fs_devices_ret)
+		*fs_devices_ret = fs_devices;
 
 	return ret;
 }
