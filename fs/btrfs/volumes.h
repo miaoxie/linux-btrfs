@@ -54,6 +54,7 @@ struct btrfs_device {
 	spinlock_t io_lock;
 	/* the mode sent to blkdev_get */
 	fmode_t mode;
+	dev_t devnum;
 
 	struct block_device *bdev;
 
@@ -187,6 +188,8 @@ struct btrfs_bio_stripe {
 	u64 length; /* only used for discard mappings */
 };
 
+void btrfs_scan_all_devices(void *holder);
+
 struct btrfs_bio;
 typedef void (btrfs_bio_end_io_t) (struct btrfs_bio *bio, int err);
 
@@ -313,7 +316,7 @@ int btrfs_find_device_missing_or_by_path(struct btrfs_root *root,
 					 char *device_path,
 					 struct btrfs_device **device);
 struct btrfs_device *btrfs_alloc_device(struct btrfs_fs_info *fs_info,
-					const u64 *devid,
+					const u64 *devid, dev_t devnum,
 					const u8 *uuid);
 int btrfs_rm_device(struct btrfs_root *root, char *device_path);
 void btrfs_cleanup_fs_uuids(void);

@@ -1974,6 +1974,7 @@ static int __init init_btrfs_fs(void)
 	if (err)
 		goto unregister_ioctl;
 
+	btrfs_scan_all_devices(&btrfs_fs_type);
 	return 0;
 
 unregister_ioctl:
