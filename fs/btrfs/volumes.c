@@ -189,42 +189,47 @@ static noinline struct btrfs_fs_devices *find_fsid(u8 *fsid)
 	return NULL;
 }
 
+static int __btrfs_get_sb(struct block_device *bdev, int flush,
+			  struct buffer_head **bh)
+{
+	int ret;
+
+	if (flush)
+		filemap_write_and_wait(bdev->bd_inode->i_mapping);
+
+	ret = set_blocksize(bdev, 4096);
+	if (ret)
+		return ret;
+
+	invalidate_bdev(bdev);
+	*bh = btrfs_read_dev_super(bdev);
+	if (!*bh)
+		return -EINVAL;
+
+	return 0;
+}
+
 static int
-btrfs_get_bdev_and_sb(const char *device_path, fmode_t flags, void *holder,
-		      int flush, struct block_device **bdev,
-		      struct buffer_head **bh)
+btrfs_get_bdev_and_sb_by_path(const char *device_path, fmode_t flags,
+			      void *holder, int flush,
+			      struct block_device **bdev,
+			      struct buffer_head **bh)
 {
 	int ret;
 
 	*bdev = blkdev_get_by_path(device_path, flags, holder);
-
 	if (IS_ERR(*bdev)) {
-		ret = PTR_ERR(*bdev);
 		printk(KERN_INFO "BTRFS: open %s failed\n", device_path);
-		goto error;
+		return PTR_ERR(*bdev);
 	}
 
-	if (flush)
-		filemap_write_and_wait((*bdev)->bd_inode->i_mapping);
-	ret = set_blocksize(*bdev, 4096);
+	ret = __btrfs_get_sb(*bdev, flush, bh);
 	if (ret) {
 		blkdev_put(*bdev, flags);
-		goto error;
-	}
-	invalidate_bdev(*bdev);
-	*bh = btrfs_read_dev_super(*bdev);
-	if (!*bh) {
-		ret = -EINVAL;
-		blkdev_put(*bdev, flags);
-		goto error;
+		return ret;
 	}
 
 	return 0;
-
-error:
-	*bdev = NULL;
-	*bh = NULL;
-	return ret;
 }
 
 static void requeue_list(struct btrfs_pending_bios *pending_bios,
@@ -769,8 +774,8 @@ static int __btrfs_open_devices(struct btrfs_fs_devices *fs_devices,
 			continue;
 
 		/* Just open everything we can; ignore failures here */
-		if (btrfs_get_bdev_and_sb(device->name->str, flags, holder, 1,
-					    &bdev, &bh))
+		if (btrfs_get_bdev_and_sb_by_path(device->name->str, flags,
+						  holder, 1, &bdev, &bh))
 			continue;
 
 		disk_super = (struct btrfs_super_block *)bh->b_data;
@@ -1603,10 +1608,10 @@ int btrfs_rm_device(struct btrfs_root *root, char *device_path)
 			goto out;
 		}
 	} else {
-		ret = btrfs_get_bdev_and_sb(device_path,
-					    FMODE_WRITE | FMODE_EXCL,
-					    root->fs_info->bdev_holder, 0,
-					    &bdev, &bh);
+		ret = btrfs_get_bdev_and_sb_by_path(device_path,
+						    FMODE_WRITE | FMODE_EXCL,
+						    root->fs_info->bdev_holder,
+						    0, &bdev, &bh);
 		if (ret)
 			goto out;
 		disk_super = (struct btrfs_super_block *)bh->b_data;
@@ -1852,8 +1857,9 @@ static int btrfs_find_device_by_path(struct btrfs_root *root, char *device_path,
 	struct buffer_head *bh;
 
 	*device = NULL;
-	ret = btrfs_get_bdev_and_sb(device_path, FMODE_READ,
-				    root->fs_info->bdev_holder, 0, &bdev, &bh);
+	ret = btrfs_get_bdev_and_sb_by_path(device_path, FMODE_READ,
+					    root->fs_info->bdev_holder, 0,
+					    &bdev, &bh);
 	if (ret)
 		return ret;
 	disk_super = (struct btrfs_super_block *)bh->b_data;
