@@ -123,7 +123,7 @@ static void btrfs_kobject_uevent(struct block_device *bdev,
 {
 	int ret;
 
-	ret = kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, action);
+	ret = kobject_uevent(&part_to_dev(bdev->bd_part)->kobj, action);
 	if (ret)
 		pr_warn("BTRFS: Sending event '%d' to kobject: '%s' (%p): failed\n",
 			action,
