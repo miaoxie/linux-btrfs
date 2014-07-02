@@ -854,24 +854,18 @@ int btrfs_open_devices(struct btrfs_fs_devices *fs_devices,
 	return ret;
 }
 
-/*
- * Look for a btrfs signature on a device. This may be called out of the mount path
- * and we are not allowed to call set_blocksize during the scan. The superblock
- * is read via pagecache
- */
-int btrfs_scan_one_device(const char *path, fmode_t flags, void *holder,
-			  struct btrfs_fs_devices **fs_devices_ret)
+static int __scan_device(struct block_device *bdev, const char *path,
+			 struct btrfs_fs_devices **fs_devices_ret)
 {
 	struct btrfs_super_block *disk_super;
-	struct block_device *bdev;
 	struct page *page;
 	void *p;
-	int ret = -EINVAL;
 	u64 devid;
 	u64 transid;
 	u64 total_devices;
 	u64 bytenr;
 	pgoff_t index;
+	int ret;
 
 	/*
 	 * we would like to check all the supers, but that would make
@@ -880,38 +874,30 @@ int btrfs_scan_one_device(const char *path, fmode_t flags, void *holder,
 	 * later supers, using BTRFS_SUPER_MIRROR_MAX instead
 	 */
 	bytenr = btrfs_sb_offset(0);
-	flags |= FMODE_EXCL;
-	mutex_lock(&uuid_mutex);
-
-	bdev = blkdev_get_by_path(path, flags, holder);
-
-	if (IS_ERR(bdev)) {
-		ret = PTR_ERR(bdev);
-		goto error;
-	}
 
 	/* make sure our super fits in the device */
 	if (bytenr + PAGE_CACHE_SIZE >= i_size_read(bdev->bd_inode))
-		goto error_bdev_put;
+		return -EINVAL;
 
 	/* make sure our super fits in the page */
 	if (sizeof(*disk_super) > PAGE_CACHE_SIZE)
-		goto error_bdev_put;
+		return -EINVAL;
 
 	/* make sure our super doesn't straddle pages on disk */
 	index = bytenr >> PAGE_CACHE_SHIFT;
 	if ((bytenr + sizeof(*disk_super) - 1) >> PAGE_CACHE_SHIFT != index)
-		goto error_bdev_put;
+		return -EINVAL;
 
 	/* pull in the page with our super */
 	page = read_cache_page_gfp(bdev->bd_inode->i_mapping,
 				   index, GFP_NOFS);
 
 	if (IS_ERR_OR_NULL(page))
-		goto error_bdev_put;
+		return -ENOMEM;
+
+	ret = -EINVAL;
 
 	p = kmap(page);
-
 	/* align our pointer to the offset of the super block */
 	disk_super = p + (bytenr & ~PAGE_CACHE_MASK);
 
@@ -943,7 +929,30 @@ error_unmap:
 	kunmap(page);
 	page_cache_release(page);
 
-error_bdev_put:
+	return ret;
+}
+
+/*
+ * Look for a btrfs signature on a device. This may be called out of the mount path
+ * and we are not allowed to call set_blocksize during the scan. The superblock
+ * is read via pagecache
+ */
+int btrfs_scan_one_device(const char *path, fmode_t flags, void *holder,
+			  struct btrfs_fs_devices **fs_devices_ret)
+{
+	struct block_device *bdev;
+	int ret;
+
+	flags |= FMODE_EXCL;
+
+	mutex_lock(&uuid_mutex);
+	bdev = blkdev_get_by_path(path, flags, holder);
+	if (IS_ERR(bdev)) {
+		ret = PTR_ERR(bdev);
+		goto error;
+	}
+
+	ret = __scan_device(bdev, path, fs_devices_ret);
 	blkdev_put(bdev, flags);
 error:
 	mutex_unlock(&uuid_mutex);
