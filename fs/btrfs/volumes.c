@@ -598,11 +598,16 @@ static struct btrfs_fs_devices *clone_fs_devices(struct btrfs_fs_devices *orig)
 		if (IS_ERR(device))
 			goto error;
 
-		/*
-		 * This is ok to do without rcu read locked because we hold the
-		 * uuid mutex so nothing we touch in here is going to disappear.
-		 */
-		if (orig_dev->name) {
+		if (orig_dev->missing) {
+			device->missing = 1;
+			fs_devices->missing_devices++;
+		} else {
+			ASSERT(orig_dev->name);
+			/*
+			 * This is ok to do without rcu read locked because
+			 * we hold the uuid mutex so nothing we touch in here
+			 * is going to disappear.
+			 */
 			name = rcu_string_strdup(orig_dev->name->str, GFP_NOFS);
 			if (!name) {
 				kfree(device);
