@@ -1715,12 +1715,16 @@ int btrfs_rm_device(struct btrfs_root *root, char *device_path)
 	 * (super_copy) should hold the device list mutex.
 	 */
 
-	cur_devices = device->fs_devices;
 	mutex_lock(&root->fs_info->fs_devices->device_list_mutex);
 	list_del_rcu(&device->dev_list);
 
 	device->fs_devices->num_devices--;
-	device->fs_devices->total_devices--;
+
+	cur_devices = root->fs_info->fs_devices;
+	do {
+		cur_devices->total_devices--;
+		cur_devices = cur_devices->seed;
+	} while (device->fs_devices != cur_devices);
 
 	if (device->missing)
 		device->fs_devices->missing_devices--;
@@ -1738,11 +1742,11 @@ int btrfs_rm_device(struct btrfs_root *root, char *device_path)
 	/* remove sysfs entry */
 	btrfs_kobj_rm_device(root->fs_info, device);
 
-	call_rcu(&device->rcu, free_device);
-
 	num_devices = btrfs_super_num_devices(root->fs_info->super_copy) - 1;
 	btrfs_set_super_num_devices(root->fs_info->super_copy, num_devices);
 	mutex_unlock(&root->fs_info->fs_devices->device_list_mutex);
+
+	call_rcu(&device->rcu, free_device);
 
 	if (cur_devices->open_devices == 0) {
 		struct btrfs_fs_devices *fs_devices;
