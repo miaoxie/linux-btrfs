@@ -1099,6 +1099,10 @@ nodatasum_case:
 		}
 	}
 
+	/* can only fix I/O errors from here on */
+	if (sblock_bad->no_io_error_seen)
+		goto did_not_correct_error;
+
 	/*
 	 * for dev_replace, pick good pages and write to the target device.
 	 */
@@ -1180,10 +1184,6 @@ nodatasum_case:
 	 * mirror, even if other 512 byte sectors in the same PAGE_SIZE
 	 * area are unreadable.
 	 */
-
-	/* can only fix I/O errors from here on */
-	if (sblock_bad->no_io_error_seen)
-		goto did_not_correct_error;
 
 	success = 1;
 	for (page_num = 0; page_num < sblock_bad->page_count; page_num++) {
