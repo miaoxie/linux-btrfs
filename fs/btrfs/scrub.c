@@ -1293,7 +1293,7 @@ static inline void scrub_stripe_index_and_offset(u64 logical, u64 map_type,
 {
 	int i;
 
-	if (map_type & (BTRFS_BLOCK_GROUP_RAID5 | BTRFS_BLOCK_GROUP_RAID6)) {
+	if (map_type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 		/* RAID5/6 */
 		for (i = 0; i < nstripes; i++) {
 			if (raid_map[i] == RAID6_Q_STRIPE ||
@@ -1440,8 +1440,7 @@ static void scrub_bio_wait_endio(struct bio *bio, int error)
 static inline int scrub_is_page_on_raid56(struct scrub_page *page)
 {
 	return page->recover &&
-	       (page->recover->bbio->map_type & (BTRFS_BLOCK_GROUP_RAID5 |
-	       BTRFS_BLOCK_GROUP_RAID6));
+	       (page->recover->bbio->map_type & BTRFS_BLOCK_GROUP_RAID56_MASK);
 }
 
 static int scrub_submit_raid56_bio_wait(struct btrfs_fs_info *fs_info,
@@ -3014,8 +3013,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	} else if (map->type & BTRFS_BLOCK_GROUP_DUP) {
 		increment = map->stripe_len;
 		mirror_num = num % map->num_stripes + 1;
-	} else if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
-				BTRFS_BLOCK_GROUP_RAID6)) {
+	} else if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 		get_raid56_logic_offset(physical, num, map, &offset, NULL);
 		increment = map->stripe_len * nr_data_stripes(map);
 		mirror_num = 1;
@@ -3049,8 +3047,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	 */
 	logical = base + offset;
 	physical_end = physical + nstripes * map->stripe_len;
-	if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
-			 BTRFS_BLOCK_GROUP_RAID6)) {
+	if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 		get_raid56_logic_offset(physical_end, num,
 					map, &logic_end, NULL);
 		logic_end += base;
@@ -3096,8 +3093,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	ret = 0;
 	while (physical < physical_end) {
 		/* for raid56, we skip parity stripe */
-		if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
-				BTRFS_BLOCK_GROUP_RAID6)) {
+		if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 			ret = get_raid56_logic_offset(physical, num,
 					map, &logical, &stripe_logical);
 			logical += base;
@@ -3255,8 +3251,7 @@ again:
 			scrub_free_csums(sctx);
 			if (extent_logical + extent_len <
 			    key.objectid + bytes) {
-				if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
-					BTRFS_BLOCK_GROUP_RAID6)) {
+				if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 					/*
 					 * loop until we find next data stripe
 					 * or we have finished all stripes.
