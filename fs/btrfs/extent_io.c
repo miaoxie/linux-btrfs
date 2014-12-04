@@ -2057,7 +2057,7 @@ int repair_io_failure(struct inode *inode, u64 start, u64 length, u64 logical,
 	sector = bbio->stripes[mirror_num-1].physical >> 9;
 	bio->bi_iter.bi_sector = sector;
 	dev = bbio->stripes[mirror_num-1].dev;
-	kfree(bbio);
+	put_btrfs_bio(bbio);
 	if (!dev || !dev->bdev || !dev->writeable) {
 		bio_put(bio);
 		return -EIO;

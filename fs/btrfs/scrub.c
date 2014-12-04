@@ -847,7 +847,7 @@ static inline void scrub_get_recover(struct scrub_recover *recover)
 static inline void scrub_put_recover(struct scrub_recover *recover)
 {
 	if (atomic_dec_and_test(&recover->refs)) {
-		kfree(recover->bbio);
+		put_btrfs_bio(recover->bbio);
 		kfree(recover);
 	}
 }
@@ -1365,13 +1365,13 @@ static int scrub_setup_recheck_block(struct scrub_ctx *sctx,
 		ret = btrfs_map_sblock(fs_info, REQ_GET_READ_MIRRORS, logical,
 				       &mapped_length, &bbio, 0, 1);
 		if (ret || !bbio || mapped_length < sublen) {
-			kfree(bbio);
+			put_btrfs_bio(bbio);
 			return -EIO;
 		}
 
 		recover = kzalloc(sizeof(struct scrub_recover), GFP_NOFS);
 		if (!recover) {
-			kfree(bbio);
+			put_btrfs_bio(bbio);
 			return -ENOMEM;
 		}
 
@@ -2740,7 +2740,7 @@ static void scrub_parity_check_and_repair(struct scrub_parity *sparity)
 rbio_out:
 	bio_put(bio);
 bbio_out:
-	kfree(bbio);
+	put_btrfs_bio(bbio);
 	bitmap_or(sparity->ebitmap, sparity->ebitmap, sparity->dbitmap,
 		  sparity->nsectors);
 	spin_lock(&sctx->stat_lock);
@@ -3871,14 +3871,14 @@ static void scrub_remap_extent(struct btrfs_fs_info *fs_info,
 			      &mapped_length, &bbio, 0);
 	if (ret || !bbio || mapped_length < extent_len ||
 	    !bbio->stripes[0].dev->bdev) {
-		kfree(bbio);
+		put_btrfs_bio(bbio);
 		return;
 	}
 
 	*extent_physical = bbio->stripes[0].physical;
 	*extent_mirror_num = bbio->mirror_num;
 	*extent_dev = bbio->stripes[0].dev;
-	kfree(bbio);
+	put_btrfs_bio(bbio);
 }
 
 static int scrub_setup_wr_ctx(struct scrub_ctx *sctx,

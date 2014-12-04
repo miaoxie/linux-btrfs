@@ -463,7 +463,7 @@ static struct reada_extent *reada_find_extent(struct btrfs_root *root,
 	spin_unlock(&fs_info->reada_lock);
 	btrfs_dev_replace_unlock(&fs_info->dev_replace);
 
-	kfree(bbio);
+	put_btrfs_bio(bbio);
 	return re;
 
 error:
@@ -488,7 +488,7 @@ error:
 		kref_put(&zone->refcnt, reada_zone_release);
 		spin_unlock(&fs_info->reada_lock);
 	}
-	kfree(bbio);
+	put_btrfs_bio(bbio);
 	kfree(re);
 	return re_exist;
 }
